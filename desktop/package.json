@@ -1,0 +1,28 @@
+{
+  "name": "diwali-lantern",
+  "productName": "Diwali Lantern",
+  "version": "1.0.0",
+  "description": "Interactive Diwali kandil, string lights, diya and crackers on your Windows desktop. Happy Diwali from Doneology Labs.",
+  "author": "Doneology Labs (OPC) Private Limited",
+  "license": "MIT",
+  "homepage": "https://github.com/arunkw/diwali-lantern",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "dist": "electron-builder --win portable zip --x64"
+  },
+  "devDependencies": {
+    "electron": "^45.2.3",
+    "electron-builder": "^26.0.0"
+  },
+  "build": {
+    "appId": "in.doneology.diwalilantern",
+    "productName": "Diwali Lantern",
+    "copyright": "Copyright (c) 2026 Doneology Labs (OPC) Private Limited",
+    "files": ["main.js", "preload.js", "icon.png", "tray.png", "package.json"],
+    "extraResources": [{ "from": "../docs", "to": "web", "filter": ["**/*", "!og.png"] }],
+    "directories": { "output": "dist" },
+    "win": { "icon": "icon.ico", "artifactName": "DiwaliLantern-${version}-${arch}.${ext}" },
+    "portable": { "artifactName": "DiwaliLantern-Portable-${version}.exe" }
+  }
+}

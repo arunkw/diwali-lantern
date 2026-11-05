@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<title>Diwali Lantern</title>
+<meta name="description" content="An interactive Diwali kandil, string lights, clay diya and crackers. Tap, swing, pluck and celebrate. Happy Diwali from Doneology Labs.">
+<meta name="theme-color" content="#120a24">
+<meta property="og:type" content="website">
+<meta property="og:title" content="Diwali Lantern - tap it, swing it, light it up">
+<meta property="og:description" content="An interactive Diwali kandil, string lights, clay diya and crackers. Happy Diwali from Doneology Labs.">
+<meta property="og:url" content="https://arunkw.github.io/diwali-lantern/">
+<meta property="og:image" content="https://arunkw.github.io/diwali-lantern/og.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Diwali Lantern">
+<meta name="twitter:description" content="Tap the kandil, swing it, pluck it, burst crackers. Happy Diwali from Doneology Labs.">
+<meta name="twitter:image" content="https://arunkw.github.io/diwali-lantern/og.png">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" type="image/png" href="icons/icon-192.png">
+<link rel="apple-touch-icon" href="icons/icon-192.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<canvas id="scene" aria-label="Interactive Diwali scene"></canvas>
+
+<button id="gear" class="gear" title="Options" aria-label="Options">
+  <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path fill="currentColor" d="M19.4 13a7.6 7.6 0 0 0 0-2l2.1-1.6-2-3.5-2.5 1a7.4 7.4 0 0 0-1.7-1L15 3.3h-4l-.4 2.6a7.4 7.4 0 0 0-1.7 1l-2.5-1-2 3.5L6.6 11a7.6 7.6 0 0 0 0 2l-2.1 1.6 2 3.5 2.5-1c.5.4 1.1.7 1.7 1l.4 2.6h4l.4-2.6c.6-.3 1.2-.6 1.7-1l2.5 1 2-3.5L19.4 13ZM13 15.5a3.5 3.5 0 1 1 0-7 3.5 3.5 0 0 1 0 7Z" transform="translate(-1 0)"/></svg>
+</button>
+
+<div id="hint" class="hint" role="status"></div>
+
+<div id="panel" class="panel" hidden>
+  <div class="card" role="dialog" aria-label="Diwali Lantern options">
+    <header>
+      <div>
+        <h1>Diwali Lantern</h1>
+        <p class="sub">Choose your kandil, lights and diya</p>
+      </div>
+      <button class="x" id="closePanel" aria-label="Close">&times;</button>
+    </header>
+
+    <section>
+      <h2>Lantern (kandil)</h2>
+      <div class="choices" id="chLantern"></div>
+    </section>
+    <section>
+      <h2>String lights (laddi / jhalar)</h2>
+      <div class="choices" id="chLights"></div>
+    </section>
+    <section>
+      <h2>Clay lamp (diya)</h2>
+      <div class="choices" id="chDiya"></div>
+    </section>
+
+    <section>
+      <h2>Lantern tag</h2>
+      <div class="row">
+        <input id="tagText" maxlength="28" placeholder="Shubh Deepavali" autocomplete="off">
+      </div>
+    </section>
+
+    <section class="actions">
+      <button id="btnRehang">Re-hang lantern &amp; strips</button>
+      <button id="btnLights">All lights on / off</button>
+      <button id="btnClear">Sweep the floor</button>
+    </section>
+
+    <section class="toggles">
+      <label><input type="checkbox" id="optSound"> Sounds</label>
+      <label><input type="checkbox" id="optSparkler"> Sparkler pointer stays on</label>
+      <label class="desk-only"><input type="checkbox" id="optDesk"> Desktop mode: click through empty space (Ctrl+Shift+D)</label>
+    </section>
+
+    <section class="help">
+      <b>How to play:</b> click anywhere for a sparkle &middot; click the kandil, bulbs or diya to switch them &middot;
+      drag the kandil to swing it, pull it down hard (or click its cord) to pluck it &middot; brush the tinsel &middot;
+      click a strip to break it &middot; drag the diya &middot; double-click for a cracker and a phuljhadi.
+    </section>
+
+    <section class="share web-only">
+      <h2>Share the light</h2>
+      <div class="share-row">
+        <a id="shWa" target="_blank" rel="noopener">WhatsApp</a>
+        <a id="shX" target="_blank" rel="noopener">X</a>
+        <a id="shLi" target="_blank" rel="noopener">LinkedIn</a>
+        <a id="shFb" target="_blank" rel="noopener">Facebook</a>
+        <button id="shNative">More&hellip;</button>
+      </div>
+    </section>
+
+    <footer>
+      <span class="diya-dot"></span>
+      Happy Diwali from <a href="https://arunkw6.wixsite.com/doneology-labs" target="_blank" rel="noopener">Doneology Labs</a>
+      <button id="btnQuit" class="desk-only quit">Quit</button>
+    </footer>
+  </div>
+</div>
+
+<script src="app.js"></script>
+</body>
+</html>

@@ -1,0 +1,60 @@
+name: Build Windows app
+
+# Builds the Windows .exe on GitHub's own servers from the public source in this repo,
+# attaches it to a Release with SHA-256 checksums, and records a signed build-provenance attestation.
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  id-token: write
+  attestations: write
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+      - name: Install
+        working-directory: desktop
+        run: npm ci
+      - name: Build portable exe and zip
+        working-directory: desktop
+        run: npx electron-builder --win portable zip --x64 --publish never
+      - name: Checksums
+        working-directory: desktop/dist
+        shell: pwsh
+        run: |
+          Get-ChildItem -File -Include *.exe,*.zip -Path * | ForEach-Object {
+            "{0}  {1}" -f (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower(), $_.Name
+          } | Out-File -Encoding ascii SHA256SUMS.txt
+          Get-Content SHA256SUMS.txt
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: |
+            desktop/dist/*.exe
+            desktop/dist/*.zip
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: DiwaliLantern-windows
+          path: |
+            desktop/dist/*.exe
+            desktop/dist/*.zip
+            desktop/dist/SHA256SUMS.txt
+      - name: Publish release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            desktop/dist/*.exe
+            desktop/dist/*.zip
+            desktop/dist/SHA256SUMS.txt
