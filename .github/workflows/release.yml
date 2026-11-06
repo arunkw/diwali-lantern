@@ -2,8 +2,12 @@ name: Build Windows app
 
 # Builds the Windows .exe on GitHub's own servers from the public source in this repo,
 # attaches it to a Release with SHA-256 checksums, and records a signed build-provenance attestation.
+# A release is published automatically for the version in desktop/package.json whenever the
+# Windows app or this workflow changes on main (or when a v* tag / GitHub release is created).
 on:
   push:
+    branches: [main]
+    paths: ['desktop/**', '.github/workflows/release.yml']
     tags: ['v*']
   release:
     types: [published]
@@ -24,6 +28,10 @@ jobs:
           node-version: 22
           cache: npm
           cache-dependency-path: desktop/package-lock.json
+      - name: Read version
+        id: ver
+        shell: bash
+        run: echo "version=$(node -p "require('./desktop/package.json').version")" >> "$GITHUB_OUTPUT"
       - name: Install
         working-directory: desktop
         run: npm ci
@@ -53,9 +61,14 @@ jobs:
             desktop/dist/*.zip
             desktop/dist/SHA256SUMS.txt
       - name: Publish release
-        if: startsWith(github.ref, 'refs/tags/')
+        if: github.event_name != 'workflow_dispatch'
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ github.event_name == 'push' && github.ref_type == 'branch' && format('v{0}', steps.ver.outputs.version) || github.ref_name }}
+          target_commitish: ${{ github.sha }}
+          name: Diwali Lantern ${{ steps.ver.outputs.version }}
+          body_path: desktop/RELEASE_NOTES.md
+          make_latest: true
           files: |
             desktop/dist/*.exe
             desktop/dist/*.zip
