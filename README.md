@@ -34,50 +34,47 @@ Happy Diwali from [Doneology Labs](https://arunkw6.wixsite.com/doneology-labs).
 Open **https://arunkw.github.io/diwali-lantern/**. Nothing to install, nothing to trust. On Android (Chrome) and iPhone (Safari) you can use **Add to Home screen** and it opens full-screen like an app, even offline.
 
 ### 2. Windows desktop overlay
-The Windows app floats **over all your other apps** on a transparent, always-on-top layer: the string lights along the top of the screen, the kandil hanging below them, and the diya sitting on the taskbar. You keep working normally underneath.
+The Windows app floats **over your other apps**, just like Dussehra Garland: string lights along the top of the screen, the kandil hanging below them, and the diya sitting on the taskbar. You keep working normally underneath.
 
-Download from [**Releases**](https://github.com/arunkw/diwali-lantern/releases/latest):
-- `DiwaliLantern-Portable-x.y.z.exe` — single file, just run it
-- `DiwaliLantern-x.y.z-x64.zip` — unzip and run `Diwali Lantern.exe`
+Download `DiwaliLantern-x.y.z.exe` from [**Releases**](https://github.com/arunkw/diwali-lantern/releases/latest) and run it. No installation.
 
 How the overlay behaves:
-- **Overlay mode** (default): clicks on empty space go straight to the app underneath, and the overlay never takes keyboard focus. The kandil, diya, bulbs and resize handles stay clickable and draggable. A click in any app still leaves a sparkle at that spot, and a double-click drops a cracker onto the taskbar (you can turn this off in the tray menu).
-- **Play mode** (`Ctrl+Shift+D` to switch): every click goes to the scene.
-- **Options**: right-click the kandil or diya, click the tray icon (near the clock), or press `Ctrl+Shift+O`.
-- **Hide / show**: `Ctrl+Shift+H`. **Quit**: `Ctrl+Shift+Q` or tray → Quit.
+- Clicks pass straight through to the app underneath, except on the kandil, the diya, the bulbs and the resize handles.
+- It never takes keyboard focus and installs **no keyboard or mouse hooks and no global shortcuts**, so typing, Alt+Tab, Ctrl+Shift+Esc and every other shortcut work as normal. It stays on top the ordinary way, so Task Manager and any window you bring forward still come to the front.
+- Brush the lights or the kandil with your pointer and they sway; click the kandil, a bulb or the diya to switch it; drag the kandil to swing it, pull it hard to pluck it; drag the diya; drag a corner handle to resize.
+- A click in any app leaves a sparkle there, and a double-click drops a cracker on the taskbar (turn this off in the menu).
+- **Options and Quit:** right-click the kandil or diya, or right-click the tray icon near the clock. Double-click the tray icon to hide or show.
 
 > **Windows SmartScreen** will say *"Windows protected your PC"* because the exe is not code-signed (a paid certificate). Click **More info → Run anyway**. If you prefer not to, use the web link — it is the same scene, in a browser tab.
->
-> The overlay reads mouse clicks system-wide (via the open-source [uiohook-napi](https://github.com/SnosMe/uiohook-napi)) only to know where to draw a sparkle. It does not read the keyboard, and nothing leaves your computer.
 
 ### 3. Run from source
 ```bash
 git clone https://github.com/arunkw/diwali-lantern.git
 cd diwali-lantern/desktop
-npm install
-npm start          # run the desktop overlay
-npm run dist       # build the Windows exe
+pip install -r requirements.txt
+python diwali_lantern.py      # Windows overlay (Python 3.10+)
+build_exe.bat                 # build DiwaliLantern.exe yourself
 ```
 The web version is plain HTML/JS in `docs/` — open `docs/index.html` or serve the folder.
 
 ## Why you can trust the download
-- **Every line of source is here.** The app is ~1,300 lines of readable JavaScript (`docs/app.js`) plus a 100-line Electron shell (`desktop/main.js`, `desktop/preload.js`).
-- **No network, no data.** It makes no web requests, has no analytics, and stores only your chosen styles and sizes locally.
+- **Every line of source is here.** The web app is readable JavaScript (`docs/app.js`); the Windows overlay is one readable Python file (`desktop/diwali_lantern.py`).
+- **No network, no data, no hooks.** It makes no web requests, has no analytics, does not read the keyboard, and stores only your chosen styles and sizes locally.
 - **Built by GitHub, not on someone's laptop.** Release files are built by the public [GitHub Actions workflow](.github/workflows/release.yml) from this source, with a `SHA256SUMS.txt` and a signed [build-provenance attestation](https://github.com/arunkw/diwali-lantern/attestations). Verify a download with:
   ```bash
-  gh attestation verify DiwaliLantern-Portable-1.2.0.exe --repo arunkw/diwali-lantern
+  gh attestation verify DiwaliLantern-2.0.0.exe --repo arunkw/diwali-lantern
   ```
-  or compare `certutil -hashfile DiwaliLantern-Portable-1.2.0.exe SHA256` with `SHA256SUMS.txt`.
+  or compare `certutil -hashfile DiwaliLantern-2.0.0.exe SHA256` with `SHA256SUMS.txt`.
 
 ## How it works
-- One canvas engine (`docs/app.js`) used by both the web and Windows builds.
+- The web app is one canvas engine (`docs/app.js`); the Windows overlay is a Python + Qt port of the same engine (`desktop/diwali_lantern.py`).
 - The kandils are true 3D meshes rendered on a 2D canvas: orthographic projection, painter's-algorithm sorting, Lambert shading plus emitted light from the bulb inside, and per-face affine-mapped textures (paper fibre, thermacol beads). The Akash Kandil draws its inside faces first so they show through the translucent paper.
 - Physics: **Verlet integration** with distance constraints. The cord, light wire and each bulb are chains of point masses; the kandil is a two-point rigid body hanging on a slack-capable rope, so it swings as a (double) pendulum and topples realistically when it lands. It also twists on its cord (a damped torsion pendulum) when swung or brushed.
 - "Hand touch": points near the pointer take on part of the pointer's velocity and are nudged aside.
 - Diya smoke: a ribbon of points released from the hot wick, rising with buoyancy and curling in a noise field, drawn as soft puffs that widen and fade.
 - Crackers, sparkles, smoke and the phuljhadi are a particle system; the bomb sends a shockwave through everything nearby (and can blow out the diya).
 - Sounds are synthesised with the Web Audio API — no audio files.
-- Windows build: Electron, frameless, transparent, non-focusable, always-on-top window sized to the work area. Click-through uses `setIgnoreMouseEvents(true, { forward: true })`: the page keeps receiving mouse moves, hit-tests the kandil, diya and bulbs, and turns click-through off only while the pointer is over one of them. A read-only global mouse hook places sparkles for clicks that pass through.
+- Windows overlay: a frameless, translucent Qt *tool* window above the taskbar that does not accept focus (the Dussehra Garland technique). Transparent pixels are click-through by Windows itself; the window also sets `WS_EX_TRANSPARENT` except while the pointer is over the kandil, diya, bulbs or a handle, so even faint glows never catch a click. The pointer and left button are read by polling — nothing system-wide is hooked. The 3D kandil is re-rendered only when it turns or dims, and the window repaints only the areas that change.
 
 ## Licence
 MIT © 2026 Doneology Labs (OPC) Private Limited. Fork it, remix it, make it yours — a mention is appreciated.

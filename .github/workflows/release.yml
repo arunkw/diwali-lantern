@@ -1,16 +1,13 @@
 name: Build Windows app
 
-# Builds the Windows .exe on GitHub's own servers from the public source in this repo,
-# attaches it to a Release with SHA-256 checksums, and records a signed build-provenance attestation.
-# A release is published automatically for the version in desktop/package.json whenever the
-# Windows app or this workflow changes on main (or when a v* tag / GitHub release is created).
+# Builds DiwaliLantern.exe on GitHub's own Windows machine from the public source in /desktop,
+# attaches it to a Release with a SHA-256 checksum and a signed build-provenance attestation.
+# A release is published automatically for APP_VERSION in desktop/diwali_lantern.py whenever
+# the Windows app or this workflow changes on main.
 on:
   push:
     branches: [main]
     paths: ['desktop/**', '.github/workflows/release.yml']
-    tags: ['v*']
-  release:
-    types: [published]
   workflow_dispatch:
 
 permissions:
@@ -23,53 +20,53 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-python@v5
         with:
-          node-version: 22
-          cache: npm
-          cache-dependency-path: desktop/package-lock.json
+          python-version: "3.12"
       - name: Read version
         id: ver
         shell: bash
-        run: echo "version=$(node -p "require('./desktop/package.json').version")" >> "$GITHUB_OUTPUT"
-      - name: Install
+        run: echo "version=$(python -c "import re;print(re.search(r'APP_VERSION = \"([^\"]+)\"', open('desktop/diwali_lantern.py', encoding='utf-8').read()).group(1))")" >> "$GITHUB_OUTPUT"
+      - name: Install build tools
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r desktop/requirements.txt pyinstaller
+      - name: Build the .exe
         working-directory: desktop
-        run: npm ci
-      - name: Build portable exe and zip
-        working-directory: desktop
-        run: npx electron-builder --win portable zip --x64 --publish never
-      - name: Checksums
+        run: python -m PyInstaller --noconfirm --onefile --windowed --name DiwaliLantern --icon icon.ico --exclude-module tkinter diwali_lantern.py
+      - name: Smoke test (starts, prints its version, exits)
         working-directory: desktop/dist
         shell: pwsh
         run: |
-          Get-ChildItem -File -Include *.exe,*.zip -Path * | ForEach-Object {
-            "{0}  {1}" -f (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower(), $_.Name
-          } | Out-File -Encoding ascii SHA256SUMS.txt
+          $p = Start-Process -FilePath .\DiwaliLantern.exe -ArgumentList '--version' -PassThru -Wait
+          if ($p.ExitCode -ne 0) { throw "exe exited with $($p.ExitCode)" }
+      - name: Name and checksum
+        working-directory: desktop/dist
+        shell: pwsh
+        run: |
+          $v = "${{ steps.ver.outputs.version }}"
+          Rename-Item DiwaliLantern.exe "DiwaliLantern-$v.exe"
+          "{0}  {1}" -f (Get-FileHash "DiwaliLantern-$v.exe" -Algorithm SHA256).Hash.ToLower(), "DiwaliLantern-$v.exe" | Out-File -Encoding ascii SHA256SUMS.txt
           Get-Content SHA256SUMS.txt
       - name: Attest build provenance
         uses: actions/attest-build-provenance@v2
         with:
-          subject-path: |
-            desktop/dist/*.exe
-            desktop/dist/*.zip
-      - name: Upload build artifacts
-        uses: actions/upload-artifact@v4
+          subject-path: desktop/dist/*.exe
+      - uses: actions/upload-artifact@v4
         with:
           name: DiwaliLantern-windows
           path: |
             desktop/dist/*.exe
-            desktop/dist/*.zip
             desktop/dist/SHA256SUMS.txt
       - name: Publish release
-        if: github.event_name != 'workflow_dispatch'
+        if: github.event_name == 'push'
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ github.event_name == 'push' && github.ref_type == 'branch' && format('v{0}', steps.ver.outputs.version) || github.ref_name }}
+          tag_name: v${{ steps.ver.outputs.version }}
           target_commitish: ${{ github.sha }}
           name: Diwali Lantern ${{ steps.ver.outputs.version }}
           body_path: desktop/RELEASE_NOTES.md
           make_latest: true
           files: |
             desktop/dist/*.exe
-            desktop/dist/*.zip
             desktop/dist/SHA256SUMS.txt
