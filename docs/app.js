@@ -1,6 +1,7 @@
 /* Diwali Lantern - (c) 2026 Doneology Labs (OPC) Pvt Ltd - MIT License
  * One canvas engine shared by the web/PWA build and the Windows desktop overlay.
- * Physics: Verlet integration with distance constraints (ropes, strips, tinsel, bulbs, kandil).
+ * Physics: Verlet integration with distance constraints (cord, light wire, bulbs, kandil).
+ * The kandils are real 3D meshes (orthographic, painter's sort, Lambert + emissive light) drawn on a 2D canvas.
  */
 (() => {
   'use strict';
@@ -22,7 +23,7 @@
 
   // ---------- settings ----------
   const KEY = 'diwaliLantern.v1';
-  const defaults = { lantern: 0, lights: 0, diya: 0, tag: 'शुभ दीपावली', sound: true, sparklerAlways: false };
+  const defaults = { lantern: 0, lights: 0, diya: 0, lanternScale: 1, diyaScale: 1.3, sound: true, sparklerAlways: false };
   let S = Object.assign({}, defaults);
   try { Object.assign(S, JSON.parse(localStorage.getItem(KEY) || '{}')); } catch (e) { /* storage unavailable */ }
   const save = () => { try { localStorage.setItem(KEY, JSON.stringify(S)); } catch (e) { /* ignore */ } };
@@ -194,114 +195,280 @@
   }
 
   // ======================================================================
-  // LANTERN (kandil)
+  // 3D MINI RENDERER (orthographic projection, painter's sort, Lambert + emission, affine textures)
   // ======================================================================
-  const LANTERN_STYLES = [
-    { name: 'Akash Kandil', paper: '#e8461f', trim: '#ffcc33', light: '#ffb347', strips: ['#ff3b30', '#ffcc00', '#ff7a00', '#e91e63'] },
-    { name: 'Star Kandil', paper: '#e8237a', trim: '#ffd84a', light: '#ff9ad0', strips: ['#ff2d78', '#ffd400', '#8e44ff', '#00b8a9'] },
-    { name: 'Paper Globe', paper: '#c8102e', trim: '#f5c542', light: '#ffa94d', strips: ['#c8102e', '#ff8f00', '#f5c542', '#7b1fa2'] },
-  ];
-  function lanternDims(style, u) {
-    if (style === 0) { const w = 112 * u, h = 168 * u; const y3 = h * 0.66, y4 = h * 0.88; return { w, h, attach: [-0.5, -0.3, -0.1, 0.1, 0.3, 0.5].map((f) => [f * w, y3]), tag: [0, y4] }; }
-    if (style === 1) {
-      const R = 74 * u, r = R * 0.45, cy = R + 10 * u, h = cy + R;
-      const tip = (deg) => [Math.cos(deg * Math.PI / 180) * R, cy + Math.sin(deg * Math.PI / 180) * R];
-      const a = tip(54), b = tip(126), inner = [0, cy + r];
-      return { w: R * 2, h, R, r, cy, attach: [[a[0] - 6 * u, a[1]], [a[0] + 4 * u, a[1] - 2 * u], [b[0] + 6 * u, b[1]], [b[0] - 4 * u, b[1] - 2 * u], [inner[0] - 8 * u, inner[1]], [inner[0] + 8 * u, inner[1]]], tag: inner };
+  const PITCH = 0.22; // we look up at a hanging kandil, so we see a little of its underside
+  const LDIR = (() => { const v = [-0.45, -0.55, 0.7], l = Math.hypot(...v); return v.map((x) => x / l); })();
+  const HV = (() => { const v = [LDIR[0], LDIR[1], LDIR[2] + 1], l = Math.hypot(...v); return v.map((x) => x / l); })();
+  let seedR = 20261105;
+  const srand = () => ((seedR = (seedR * 16807) % 2147483647) / 2147483647);
+  const TEX = {};
+  function mkTex(name, size, paint) { if (TEX[name]) return TEX[name]; const c = document.createElement('canvas'); c.width = c.height = size; paint(c.getContext('2d'), size); return (TEX[name] = c); }
+  function wrapDraw(n, x, y, r, fn) { for (const ox of [-n, 0, n]) for (const oy of [-n, 0, n]) if (x + ox > -r && x + ox < n + r && y + oy > -r && y + oy < n + r) fn(x + ox, y + oy); }
+  const TEXF = {
+    paper: () => mkTex('paper', 128, (g, n) => { // paper fibres and grain
+      for (let i = 0; i < 700; i++) {
+        const x = srand() * n, y = srand() * n, l = 4 + srand() * 12, a = srand() * Math.PI, light = srand() < 0.5;
+        g.strokeStyle = light ? 'rgba(255,255,255,0.5)' : 'rgba(0,0,0,0.45)'; g.lineWidth = 0.5 + srand() * 0.6;
+        wrapDraw(n, x, y, l, (px, py) => { g.beginPath(); g.moveTo(px, py); g.quadraticCurveTo(px + Math.cos(a + 0.4) * l * 0.5, py + Math.sin(a + 0.4) * l * 0.5, px + Math.cos(a) * l, py + Math.sin(a) * l); g.stroke(); });
+      }
+      for (let i = 0; i < 3000; i++) { g.fillStyle = srand() < 0.5 ? 'rgba(255,255,255,0.3)' : 'rgba(0,0,0,0.3)'; g.fillRect(srand() * n, srand() * n, 1, 1); }
+    }),
+    foam: () => mkTex('foam', 64, (g, n) => { // expanded polystyrene (thermacol) beads
+      g.fillStyle = 'rgba(110,110,110,0.35)'; g.fillRect(0, 0, n, n);
+      for (let i = 0; i < 230; i++) {
+        const x = srand() * n, y = srand() * n, r = 2.2 + srand() * 2.8;
+        wrapDraw(n, x, y, r, (px, py) => { const gr = g.createRadialGradient(px - r * 0.35, py - r * 0.35, 0, px, py, r); gr.addColorStop(0, 'rgba(255,255,255,0.95)'); gr.addColorStop(0.75, 'rgba(235,235,235,0.5)'); gr.addColorStop(1, 'rgba(100,100,100,0.6)'); g.fillStyle = gr; g.beginPath(); g.arc(px, py, r, 0, TAU); g.fill(); });
+      }
+    }),
+    clay: () => mkTex('clay', 96, (g, n) => { // fired clay grain
+      for (let i = 0; i < 3200; i++) { const v = srand(); g.fillStyle = v < 0.55 ? `rgba(40,10,0,${0.12 + v * 0.35})` : `rgba(255,215,170,${(v - 0.55) * 0.5})`; const sz = srand() < 0.88 ? 1 : 2; g.fillRect(srand() * n, srand() * n, sz, sz); }
+      for (let i = 0; i < 40; i++) { g.strokeStyle = 'rgba(60,20,5,0.25)'; g.lineWidth = 0.6; const x = srand() * n, y = srand() * n; g.beginPath(); g.moveTo(x, y); g.lineTo(x + srand() * 14 - 7, y + srand() * 3); g.stroke(); }
+    }),
+  };
+  const patCache = new WeakMap();
+  function pat(g, name) { let m = patCache.get(g); if (!m) patCache.set(g, (m = {})); return m[name] || (m[name] = g.createPattern(TEXF[name](), 'repeat')); }
+  function mixHex(a, b, t) { const A = hex2rgb(a), B = hex2rgb(b), h = (v) => Math.round(clamp(v, 0, 255)).toString(16).padStart(2, '0'); return '#' + h(lerp(A[0], B[0], t)) + h(lerp(A[1], B[1], t)) + h(lerp(A[2], B[2], t)); }
+
+  function V3(md, x, y, z) { md.verts.push([x, y, z]); return md.verts.length - 1; }
+  function F3(md, v, o) { md.faces.push(Object.assign({ v }, o)); }
+  function finalize(md) {
+    const c = md.center, P = md.verts;
+    for (const f of md.faces) {
+      const a = P[f.v[0]], b = P[f.v[1]], d = P[f.v[2]];
+      const e1 = [b[0] - a[0], b[1] - a[1], b[2] - a[2]], e2 = [d[0] - a[0], d[1] - a[1], d[2] - a[2]];
+      const n = [e1[1] * e2[2] - e1[2] * e2[1], e1[2] * e2[0] - e1[0] * e2[2], e1[0] * e2[1] - e1[1] * e2[0]];
+      let cx = 0, cy = 0, cz = 0; for (const i of f.v) { cx += P[i][0]; cy += P[i][1]; cz += P[i][2]; }
+      cx /= f.v.length; cy /= f.v.length; cz /= f.v.length;
+      const ref = f.out || [cx - c[0], cy - c[1], cz - c[2]];
+      f.sg = n[0] * ref[0] + n[1] * ref[1] + n[2] * ref[2] >= 0 ? 1 : -1;
+      // planar texture coordinates (in model units) so textures and decals stick to the surface
+      const l1 = Math.hypot(...e1) || 1, u1 = e1.map((x) => x / l1), nl = Math.hypot(...n) || 1, nn = n.map((x) => x / nl);
+      const u2 = [nn[1] * u1[2] - nn[2] * u1[1], nn[2] * u1[0] - nn[0] * u1[2], nn[0] * u1[1] - nn[1] * u1[0]];
+      f.t = f.v.map((i) => { const p = P[i], w = [p[0] - a[0], p[1] - a[1], p[2] - a[2]]; return [w[0] * u1[0] + w[1] * u1[1] + w[2] * u1[2], w[0] * u2[0] + w[1] * u2[1] + w[2] * u2[2]]; });
+      let x0 = 1e9, y0 = 1e9, x1 = -1e9, y1 = -1e9; for (const q of f.t) { x0 = Math.min(x0, q[0]); y0 = Math.min(y0, q[1]); x1 = Math.max(x1, q[0]); y1 = Math.max(y1, q[1]); }
+      f.tb = [x0 - 2, y0 - 2, x1 - x0 + 4, y1 - y0 + 4];
+      f.tc = [(x0 + x1) / 2, (y0 + y1) / 2];
+      if (f.decals) for (const dc of f.decals) dc.p = dc.bary ? [dc.bary.reduce((s, w, k) => s + w * f.t[k][0], 0), dc.bary.reduce((s, w, k) => s + w * f.t[k][1], 0)] : f.tc;
+      if (f.glitter) f.gl = Array.from({ length: 4 }, () => [srand(), srand(), srand() * TAU]);
     }
-    const w = 120 * u, h = 156 * u, cy = h * 0.5, ry = h * 0.38, by = cy + ry + 6 * u;
-    return { w, h, cy, ry, attach: [-0.32, -0.19, -0.07, 0.07, 0.19, 0.32].map((f) => [f * w, by]), tag: [0, by + 4 * u] };
+    return md;
+  }
+  function rotP(v, cyw, syw, cp, sp, c) { const x = v[0] - c[0], y = v[1] - c[1], z = v[2] - c[2], x1 = x * cyw + z * syw, z1 = -x * syw + z * cyw; return [x1 + c[0], y * cp - z1 * sp + c[1], y * sp + z1 * cp]; }
+  function facePath(g, P, f) { const v = f.v; g.beginPath(); g.moveTo(P[v[0]][0], P[v[0]][1]); for (let i = 1; i < v.length; i++) g.lineTo(P[v[i]][0], P[v[i]][1]); g.closePath(); }
+  function texAffine(g, P, f) {
+    const [i0, i1, i2] = f.v, [u0, v0] = f.t[0], [ua, va] = f.t[1], [ub, vb] = f.t[2];
+    const du1 = ua - u0, dv1 = va - v0, du2 = ub - u0, dv2 = vb - v0, det = du1 * dv2 - du2 * dv1;
+    if (Math.abs(det) < 1e-6) return false;
+    const x0 = P[i0][0], y0 = P[i0][1], dx1 = P[i1][0] - x0, dy1 = P[i1][1] - y0, dx2 = P[i2][0] - x0, dy2 = P[i2][1] - y0;
+    const a = (dx1 * dv2 - dx2 * dv1) / det, c = (dx2 * du1 - dx1 * du2) / det, b = (dy1 * dv2 - dy2 * dv1) / det, d = (dy2 * du1 - dy1 * du2) / det;
+    if (Math.abs(a * d - b * c) < 1e-4) return false;
+    g.transform(a, b, c, d, x0 - a * u0 - c * v0, y0 - b * u0 - d * v0);
+    return true;
+  }
+  function faceColor(f, n, lvl, flick) {
+    const lam = Math.max(0, n[0] * LDIR[0] + n[1] * LDIR[1] + n[2] * LDIR[2]), front = n[2] > 0;
+    const spec = (p) => Math.pow(Math.max(0, n[0] * HV[0] + n[1] * HV[1] + n[2] * HV[2]), p);
+    switch (f.mat) {
+      case 'tpaper': { // translucent coloured paper, lit from inside
+        const ext = front ? 0.25 + 0.6 * lam : 0.16, em = lvl * flick * (front ? 0.6 + 0.48 * n[2] : 0.95);
+        return shade(f.col, ext * (1 - 0.55 * lvl) + em);
+      }
+      case 'foam': { // matte thermacol, faintly glowing when the bulb is on
+        const base = lvl > 0.01 ? mixHex(f.col, '#ffe2b0', 0.42 * lvl) : f.col;
+        return shade(base, 0.48 + 0.58 * lam + 0.2 * lvl * flick);
+      }
+      case 'foil': return shade(f.col, 0.42 + 0.5 * lam + 1.2 * spec(14) + 0.2 * lvl);
+      case 'gpaper': { // opaque-ish paper: brightest where it faces us, like a real paper globe
+        const ext = 0.28 + 0.5 * lam, em = lvl * flick * (0.22 + 0.95 * Math.pow(Math.max(0, n[2]), 1.6));
+        return shade(f.col, ext * (1 - 0.5 * lvl) + em);
+      }
+      case 'gold': return shade(f.col, 0.4 + 0.55 * lam + 0.9 * spec(10) + 0.15 * lvl);
+      default: return shade(f.col, 0.3 + 0.6 * lam + 0.1 * lvl);
+    }
+  }
+  function drawDecal(g, f, dc, lvl, flick, alpha) {
+    const [x, y] = dc.p, r = dc.r;
+    if (dc.shape === 'diamond') {
+      g.globalAlpha = alpha * 0.85; g.fillStyle = faceColor({ mat: 'tpaper', col: dc.col }, [0, 0, 1], lvl, flick);
+      g.beginPath(); g.moveTo(x, y - r * 1.45); g.lineTo(x + r, y); g.lineTo(x, y + r * 1.45); g.lineTo(x - r, y); g.closePath(); g.fill();
+    } else if (dc.shape === 'hole') { // a cut-out showing the bulb inside
+      g.globalAlpha = alpha; g.fillStyle = lvl > 0.02 ? shade('#ffd06a', 0.65 + 0.6 * lvl * flick) : '#3b2e24';
+      g.beginPath(); g.arc(x, y, r, 0, TAU); g.fill();
+      g.strokeStyle = 'rgba(80,60,40,0.45)'; g.lineWidth = r * 0.25; g.stroke();
+      if (lvl > 0.05) { g.save(); g.globalCompositeOperation = 'lighter'; g.globalAlpha = lvl * 0.8; g.drawImage(glowSprite('#ffc860'), x - r * 3, y - r * 3, r * 6, r * 6); g.restore(); }
+    } else if (dc.shape === 'dot') {
+      g.globalAlpha = alpha; g.fillStyle = faceColor({ mat: 'gpaper', col: dc.col }, [0, 0, 1], lvl, flick);
+      g.beginPath(); g.arc(x, y, r, 0, TAU); g.fill();
+    }
+    g.globalAlpha = alpha;
+  }
+  function drawModel(g, md, yaw, lvl, t, light) {
+    const c = md.center, cyw = Math.cos(yaw), syw = Math.sin(yaw), cp = Math.cos(PITCH), sp = Math.sin(PITCH);
+    const P = md.verts.map((v) => rotP(v, cyw, syw, cp, sp, c));
+    const flick = 1 + Math.sin(t * 9.1) * 0.03 + Math.sin(t * 13.7) * 0.02;
+    const list = [];
+    for (const f of md.faces) {
+      const a = P[f.v[0]], b = P[f.v[1]], d = P[f.v[2]];
+      let nx = (b[1] - a[1]) * (d[2] - a[2]) - (b[2] - a[2]) * (d[1] - a[1]), ny = (b[2] - a[2]) * (d[0] - a[0]) - (b[0] - a[0]) * (d[2] - a[2]), nz = (b[0] - a[0]) * (d[1] - a[1]) - (b[1] - a[1]) * (d[0] - a[0]);
+      const nl = (Math.hypot(nx, ny, nz) || 1) * f.sg; nx /= nl; ny /= nl; nz /= nl;
+      if (!md.translucent && nz <= 0.001) continue; // opaque: back-face culling
+      let z = 0; for (const i of f.v) z += P[i][2];
+      list.push({ f, n: [nx, ny, nz], z: z / f.v.length + (f.zb || 0) * md.u });
+    }
+    list.sort((p, q) => p.z - q.z);
+    const drawFace = (it, alpha) => {
+      const f = it.f, n = it.n;
+      g.globalAlpha = alpha; g.fillStyle = faceColor(f, n, lvl, flick);
+      facePath(g, P, f); g.fill();
+      if (md.seam) { g.strokeStyle = g.fillStyle; g.lineWidth = 0.9; g.stroke(); }
+      if (f.tex || f.decals) {
+        g.save(); facePath(g, P, f); g.clip();
+        if (texAffine(g, P, f)) {
+          if (f.tex) { g.globalAlpha = alpha * f.texA; g.fillStyle = pat(g, f.tex); g.fillRect(f.tb[0], f.tb[1], f.tb[2], f.tb[3]); }
+          if (f.decals && n[2] > -0.05) for (const dc of f.decals) drawDecal(g, f, dc, lvl, flick, alpha);
+        }
+        g.restore();
+      }
+      if (f.glitter) { // foil glitter catching the light
+        const A = P[f.v[0]], B = P[f.v[1]], C2 = P[f.v[2]];
+        g.save(); g.globalCompositeOperation = 'lighter';
+        for (const [p, q, ph] of f.gl) {
+          const s = Math.pow(Math.max(0, Math.sin(t * 3.1 + ph)), 10); if (s < 0.05) continue;
+          const x = A[0] + (B[0] - A[0]) * p + (C2[0] - B[0]) * q * p, y = A[1] + (B[1] - A[1]) * p + (C2[1] - B[1]) * q * p;
+          g.globalAlpha = s; g.drawImage(glowSprite('#fff6d0'), x - 4 * md.u, y - 4 * md.u, 8 * md.u, 8 * md.u);
+        }
+        g.restore();
+      }
+      if (f.edge) {
+        g.globalAlpha = alpha * (n[2] > 0 ? 1 : 0.55); g.strokeStyle = f.edge; g.lineWidth = f.edgeW || 1.2 * md.u; g.lineJoin = 'round';
+        if (f.edgeSeg) { g.beginPath(); g.moveTo(P[f.edgeSeg[0]][0], P[f.edgeSeg[0]][1]); g.lineTo(P[f.edgeSeg[1]][0], P[f.edgeSeg[1]][1]); g.stroke(); }
+        else { facePath(g, P, f); g.stroke(); }
+      }
+      g.globalAlpha = 1;
+    };
+    if (md.translucent) {
+      for (const it of list) if (it.n[2] <= 0) drawFace(it, 0.97); // inside surfaces, seen through the paper
+      if (lvl > 0.01 && light) { g.save(); g.globalCompositeOperation = 'lighter'; g.globalAlpha = lvl * flick * 0.9; const r = md.glowR * 0.6; g.drawImage(glowSprite('#fff2c8'), c[0] - r * 0.4, c[1] - r * 0.4, r * 0.8, r * 0.8); g.drawImage(glowSprite(light), c[0] - r, c[1] - r, r * 2, r * 2); g.restore(); }
+      for (const it of list) if (it.n[2] > 0) drawFace(it, lvl > 0.01 ? 0.8 - 0.12 * lvl : 0.93);
+    } else for (const it of list) drawFace(it, 1);
+    return P;
   }
 
-  // draw lantern body in local coordinates (hook at 0,0; y down)
-  function drawLanternBody(g, style, u, lvl, t) {
-    const st = LANTERN_STYLES[style], D = lanternDims(style, u);
-    const pf = 0.42 + 0.58 * lvl; // paper brightness
-    const flick = 1 + Math.sin(t * 9.1) * 0.03 + Math.sin(t * 13.7) * 0.02;
-    g.lineJoin = 'round';
-    // hook ring
-    g.strokeStyle = shade(st.trim, 0.8); g.lineWidth = 2 * u;
-    g.beginPath(); g.arc(0, 3 * u, 3 * u, 0, TAU); g.stroke();
-
-    if (style === 0) {
-      const { w, h } = D, y1 = h * 0.08, y2 = h * 0.32, y3 = h * 0.66, y4 = h * 0.88;
-      // inner glow behind paper
-      if (lvl > 0.01) { g.save(); g.globalCompositeOperation = 'lighter'; g.globalAlpha = lvl * flick; g.drawImage(glowSprite(st.light), -w, (y2 + y3) / 2 - w, w * 2, w * 2); g.restore(); }
-      // cap
-      g.fillStyle = shade(st.trim, 0.55 + 0.4 * lvl); g.fillRect(-w * 0.12, 5 * u, w * 0.24, y1 - 5 * u);
-      // top pyramid: two faces
-      g.fillStyle = shade(st.paper, pf * 0.8); g.beginPath(); g.moveTo(-w * 0.12, y1); g.lineTo(0, y1); g.lineTo(-w * 0.17, y2); g.lineTo(-w / 2, y2); g.closePath(); g.fill();
-      g.fillStyle = shade(st.paper, pf * 1.0); g.beginPath(); g.moveTo(-w * 0.04, y1); g.lineTo(w * 0.04, y1); g.lineTo(w * 0.17, y2); g.lineTo(-w * 0.17, y2); g.closePath(); g.fill();
-      g.fillStyle = shade(st.paper, pf * 0.7); g.beginPath(); g.moveTo(0, y1); g.lineTo(w * 0.12, y1); g.lineTo(w / 2, y2); g.lineTo(w * 0.17, y2); g.closePath(); g.fill();
-      // band: three hexagon faces
-      const faces = [[-w / 2, -w / 6, 0.78], [-w / 6, w / 6, 1.0], [w / 6, w / 2, 0.68]];
-      for (const [x0, x1, f] of faces) {
-        g.fillStyle = shade(st.paper, pf * f); g.fillRect(x0, y2, x1 - x0, y3 - y2);
-        // diamond window + dots showing the light
-        const cx = (x0 + x1) / 2, cy = (y2 + y3) / 2, hw = (x1 - x0) * 0.28, hh = (y3 - y2) * 0.32;
-        g.fillStyle = lvl > 0.02 ? shade('#fff0b8', 0.55 + 0.45 * lvl * flick) : shade(st.paper, 0.32);
-        g.beginPath(); g.moveTo(cx, cy - hh); g.lineTo(cx + hw, cy); g.lineTo(cx, cy + hh); g.lineTo(cx - hw, cy); g.closePath(); g.fill();
-        for (const dy of [-hh * 1.25, hh * 1.25]) { g.beginPath(); g.arc(cx, cy + dy, 2.2 * u, 0, TAU); g.fill(); }
-        g.strokeStyle = shade(st.trim, 0.5 + 0.5 * lvl); g.lineWidth = 1.2 * u; g.strokeRect(x0, y2, x1 - x0, y3 - y2);
-      }
-      // frills
-      g.fillStyle = shade(st.trim, 0.6 + 0.4 * lvl);
-      for (let i = 0; i < 12; i++) { const x = -w / 2 + (i + 0.5) * (w / 12); g.beginPath(); g.moveTo(x - w / 24, y2); g.lineTo(x, y2 + 6 * u); g.lineTo(x + w / 24, y2); g.fill(); g.beginPath(); g.moveTo(x - w / 24, y3); g.lineTo(x, y3 - 6 * u); g.lineTo(x + w / 24, y3); g.fill(); }
-      // bottom pyramid
-      g.fillStyle = shade(st.paper, pf * 0.75); g.beginPath(); g.moveTo(-w / 2, y3); g.lineTo(-w * 0.17, y3); g.lineTo(-w * 0.03, y4); g.lineTo(-w * 0.08, y4); g.closePath(); g.fill();
-      g.fillStyle = shade(st.paper, pf * 0.95); g.beginPath(); g.moveTo(-w * 0.17, y3); g.lineTo(w * 0.17, y3); g.lineTo(w * 0.05, y4); g.lineTo(-w * 0.05, y4); g.closePath(); g.fill();
-      g.fillStyle = shade(st.paper, pf * 0.62); g.beginPath(); g.moveTo(w * 0.17, y3); g.lineTo(w / 2, y3); g.lineTo(w * 0.08, y4); g.lineTo(w * 0.03, y4); g.closePath(); g.fill();
-      g.strokeStyle = shade(st.trim, 0.55 + 0.45 * lvl); g.lineWidth = 1.4 * u;
-      g.beginPath(); g.moveTo(-w / 2, y2); g.lineTo(-w * 0.12, y1); g.moveTo(w / 2, y2); g.lineTo(w * 0.12, y1); g.moveTo(-w / 2, y3); g.lineTo(-w * 0.08, y4); g.lineTo(w * 0.08, y4); g.lineTo(w / 2, y3); g.stroke();
-    } else if (style === 1) {
-      const { R, r, cy } = D;
-      if (lvl > 0.01) { g.save(); g.globalCompositeOperation = 'lighter'; g.globalAlpha = lvl * flick; g.drawImage(glowSprite(st.light), -R * 1.6, cy - R * 1.6, R * 3.2, R * 3.2); g.restore(); }
-      g.strokeStyle = shade(st.trim, 0.6); g.lineWidth = 2 * u; g.beginPath(); g.moveTo(0, 6 * u); g.lineTo(0, cy - R); g.stroke();
-      const v = []; for (let i = 0; i < 10; i++) { const a = -Math.PI / 2 + i * Math.PI / 5, rr = i % 2 ? r : R; v.push([Math.cos(a) * rr, cy + Math.sin(a) * rr]); }
-      for (let i = 0; i < 10; i++) {
-        const a = v[i], b = v[(i + 1) % 10];
-        g.fillStyle = shade(st.paper, pf * (i % 2 ? 0.72 : 1.02));
-        g.beginPath(); g.moveTo(0, cy); g.lineTo(a[0], a[1]); g.lineTo(b[0], b[1]); g.closePath(); g.fill();
-      }
-      g.strokeStyle = shade(st.trim, 0.55 + 0.45 * lvl); g.lineWidth = 1.6 * u;
-      g.beginPath(); v.forEach((p, i) => (i ? g.lineTo(p[0], p[1]) : g.moveTo(p[0], p[1]))); g.closePath(); g.stroke();
-      // inner star with cut-work
-      const s2 = 0.52; g.fillStyle = lvl > 0.02 ? shade('#fff2a8', 0.6 + 0.4 * lvl * flick) : shade(st.trim, 0.45);
-      g.beginPath(); v.forEach((p, i) => { const x = p[0] * s2, y = cy + (p[1] - cy) * s2; i ? g.lineTo(x, y) : g.moveTo(x, y); }); g.closePath(); g.fill();
-      g.fillStyle = shade(st.paper, pf * 0.85);
-      for (let i = 0; i < 5; i++) { const a = -Math.PI / 2 + i * TAU / 5; g.beginPath(); g.arc(Math.cos(a) * R * 0.2, cy + Math.sin(a) * R * 0.2, 3.2 * u, 0, TAU); g.fill(); }
-      g.beginPath(); g.arc(0, cy, 4 * u, 0, TAU); g.fill();
-      for (let i = 0; i < 5; i++) { const a = -Math.PI / 2 + i * TAU / 5, x = Math.cos(a) * R * 0.72, y = cy + Math.sin(a) * R * 0.72; g.fillStyle = lvl > 0.02 ? shade('#fff2a8', 0.5 + 0.5 * lvl) : shade(st.paper, 0.35); g.beginPath(); g.arc(x, y, 2.6 * u, 0, TAU); g.fill(); }
-    } else {
-      const { w, cy, ry } = D, rx = w / 2;
-      if (lvl > 0.01) { g.save(); g.globalCompositeOperation = 'lighter'; g.globalAlpha = lvl * flick; g.drawImage(glowSprite(st.light), -w * 1.1, cy - w * 1.1, w * 2.2, w * 2.2); g.restore(); }
-      g.strokeStyle = shade(st.trim, 0.6); g.lineWidth = 2 * u; g.beginPath(); g.moveTo(0, 6 * u); g.lineTo(0, cy - ry - 8 * u); g.stroke();
-      const gr = g.createRadialGradient(-rx * 0.2, cy - ry * 0.2, 2, 0, cy, rx * 1.05);
-      gr.addColorStop(0, lvl > 0.02 ? shade('#ffe1a0', 0.6 + 0.45 * lvl * flick) : shade(st.paper, 0.6));
-      gr.addColorStop(0.55, shade(st.paper, pf)); gr.addColorStop(1, shade(st.paper, pf * 0.55));
-      g.fillStyle = gr; g.beginPath(); g.ellipse(0, cy, rx, ry, 0, 0, TAU); g.fill();
-      g.save(); g.beginPath(); g.ellipse(0, cy, rx, ry, 0, 0, TAU); g.clip();
-      g.strokeStyle = shade(st.trim, 0.45 + 0.4 * lvl); g.lineWidth = 1.1 * u;
-      for (let k = 1; k <= 4; k++) { const ex = rx * k / 4.4; g.beginPath(); g.ellipse(0, cy, ex, ry, 0, 0, TAU); g.stroke(); }
-      for (let k = -2; k <= 2; k++) { g.beginPath(); g.ellipse(0, cy + k * ry * 0.35, rx, 3 * u, 0, 0, TAU); g.globalAlpha = 0.5; g.stroke(); g.globalAlpha = 1; }
-      // mandala medallion
-      g.fillStyle = lvl > 0.02 ? shade('#fff0b0', 0.55 + 0.45 * lvl) : shade(st.trim, 0.45);
-      g.beginPath(); g.arc(0, cy, ry * 0.28, 0, TAU); g.fill();
-      g.fillStyle = shade(st.paper, pf * 0.9);
-      for (let i = 0; i < 8; i++) { const a = i * TAU / 8; g.beginPath(); g.ellipse(Math.cos(a) * ry * 0.15, cy + Math.sin(a) * ry * 0.15, 4 * u, 2 * u, a, 0, TAU); g.fill(); }
-      g.restore();
-      g.fillStyle = shade(st.trim, 0.55 + 0.45 * lvl);
-      g.beginPath(); g.ellipse(0, cy - ry, rx * 0.36, 7 * u, 0, 0, TAU); g.fill();
-      g.beginPath(); g.ellipse(0, cy + ry, rx * 0.36, 7 * u, 0, 0, TAU); g.fill();
-      g.fillRect(-rx * 0.36, cy - ry - 8 * u, rx * 0.72, 4 * u); g.fillRect(-rx * 0.36, cy + ry + 3 * u, rx * 0.72, 4 * u);
+  // ======================================================================
+  // LANTERN (kandil) - three 3D models
+  // ======================================================================
+  const LANTERN_STYLES = [
+    { name: 'Akash Kandil', light: '#ffb347' },
+    { name: 'Star Kandil', light: '#ffc870' },
+    { name: 'Paper Globe', light: '#ffa04a' },
+  ];
+  // Akash kandil: hexagonal bamboo frame covered with translucent coloured paper, with paper frills
+  function akashModel(u) {
+    const md = { verts: [], faces: [], translucent: true }, N = 6, W = 122 * u, H = 180 * u, R = W / 2;
+    const y1 = 12 * u, y2 = H * 0.3, y3 = H * 0.64, y4 = H * 0.9, a0 = Math.PI / 6;
+    md.center = [0, (y2 + y3) / 2, 0]; md.w = W; md.h = y4 + 2 * u; md.glowR = W * 1.05; md.hookY = y1;
+    const ring = (r, y) => { const ids = []; for (let i = 0; i < N; i++) { const a = a0 + i * TAU / N; ids.push(V3(md, Math.cos(a) * r, y, Math.sin(a) * r)); } return ids; };
+    const r1 = ring(R * 0.24, y1), r2 = ring(R, y2), r3 = ring(R, y3), r4 = ring(R * 0.16, y4);
+    const pal = ['#ff2b2b', '#ffc400', '#ff2e93', '#ff7300', '#1fbf62', '#2f8cff'], bamboo = '#6a4422';
+    for (let i = 0; i < N; i++) {
+      const j = (i + 1) % N;
+      F3(md, [r1[i], r1[j], r2[j], r2[i]], { mat: 'tpaper', col: pal[(i + 3) % N], tex: 'paper', texA: 0.22, edge: bamboo });
+      F3(md, [r2[i], r2[j], r3[j], r3[i]], { mat: 'tpaper', col: pal[i], tex: 'paper', texA: 0.22, edge: bamboo, decals: [{ shape: 'diamond', r: 14 * u, col: pal[(i + 2) % N] }, { shape: 'diamond', r: 5.5 * u, col: '#fff1a8' }] });
+      F3(md, [r3[i], r3[j], r4[j], r4[i]], { mat: 'tpaper', col: pal[(i + 3) % N], tex: 'paper', texA: 0.22, edge: bamboo });
     }
+    F3(md, [...r1], { mat: 'gold', col: '#e0b040', out: [0, -1, 0] });
+    F3(md, [...r4], { mat: 'gold', col: '#e0b040', out: [0, 1, 0] });
+    const frill = (ids, y, drop, len, col) => {
+      for (let i = 0; i < N; i++) {
+        const A = md.verts[ids[i]], B = md.verts[ids[(i + 1) % N]];
+        for (let k = 0; k < 4; k++) {
+          const f0 = k / 4, f1 = (k + 1) / 4, fm = (f0 + f1) / 2, pm = [lerp(A[0], B[0], fm), y, lerp(A[2], B[2], fm)], ol = Math.hypot(pm[0], pm[2]) || 1;
+          F3(md, [V3(md, lerp(A[0], B[0], f0), y, lerp(A[2], B[2], f0)), V3(md, lerp(A[0], B[0], f1), y, lerp(A[2], B[2], f1)), V3(md, pm[0] + pm[0] / ol * len * 0.55, y + drop, pm[2] + pm[2] / ol * len * 0.55)],
+            { mat: 'tpaper', col, out: [pm[0], 0, pm[2]], zb: 0.6 });
+        }
+      }
+    };
+    frill(r2, y2, 8 * u, 10 * u, '#ffd23f');
+    frill(r3, y3, 13 * u, 12 * u, '#ffd23f');
+    return md;
+  }
+  // Star kandil: carved thermacol (expanded polystyrene) star with foil-wrapped edges and cut-outs
+  function starModel(u) {
+    const md = { verts: [], faces: [], translucent: false }, R = 80 * u, r = 35 * u, cy = 16 * u + R, t = 7 * u, d = 22 * u;
+    md.center = [0, cy, 0]; md.w = R * 2; md.h = cy + R * 0.82; md.glowR = R * 1.5; md.hookY = cy - R;
+    const oF = [], oB = [];
+    for (let i = 0; i < 10; i++) { const a = -Math.PI / 2 + i * Math.PI / 5, rr = i % 2 ? r : R; oF.push(V3(md, Math.cos(a) * rr, cy + Math.sin(a) * rr, t)); oB.push(V3(md, Math.cos(a) * rr, cy + Math.sin(a) * rr, -t)); }
+    const aF = V3(md, 0, cy, t + d), aB = V3(md, 0, cy, -t - d), foil = ['#e8b02a', '#d7263d'];
+    for (let i = 0; i < 10; i++) {
+      const j = (i + 1) % 10, tipAt1 = i % 2 === 0;
+      const holes = [{ shape: 'hole', bary: [0.3, 0.35, 0.35], r: 3.6 * u }, { shape: 'hole', bary: tipAt1 ? [0.12, 0.7, 0.18] : [0.12, 0.18, 0.7], r: 2.3 * u }, { shape: 'hole', bary: [0.66, 0.17, 0.17], r: 2 * u }];
+      F3(md, [aF, oF[i], oF[j]], { mat: 'foam', col: '#f4f1ea', tex: 'foam', texA: 0.6, decals: holes, edge: 'rgba(150,140,125,0.4)', edgeW: 0.7 * u });
+      F3(md, [aB, oB[j], oB[i]], { mat: 'foam', col: '#f4f1ea', tex: 'foam', texA: 0.6 });
+      F3(md, [oF[i], oB[i], oB[j], oF[j]], { mat: 'foil', col: foil[i % 2], glitter: true });
+    }
+    return md;
+  }
+  // Paper globe: pleated paper lantern on wire rings, with a painted band and lacquered card caps
+  function globeModel(u) {
+    const md = { verts: [], faces: [], translucent: false, seam: true }, R = 64 * u, ry = R * 0.9, cy = 22 * u + ry;
+    md.center = [0, cy, 0]; md.w = R * 2; md.R = R; md.ry = ry; md.glowR = R * 1.9;
+    const nLat = 14, nLon = 22, lat1 = 1.2, grid = [];
+    for (let k = 0; k <= nLat; k++) {
+      const ph = lerp(lat1, -lat1, k / nLat), pleat = k % 2 ? 0.965 : 1, rr = R * Math.cos(ph) * pleat, y = cy - ry * Math.sin(ph), row = [];
+      for (let i = 0; i < nLon; i++) { const a = i * TAU / nLon; row.push(V3(md, Math.cos(a) * rr, y, Math.sin(a) * rr)); }
+      grid.push(row);
+    }
+    for (let k = 0; k < nLat; k++) for (let i = 0; i < nLon; i++) {
+      const j = (i + 1) % nLon, eq = k === 6 || k === 7;
+      F3(md, [grid[k][i], grid[k][j], grid[k + 1][j], grid[k + 1][i]], {
+        mat: 'gpaper', col: eq ? '#f0b232' : '#d8262d', edge: 'rgba(80,12,10,0.5)', edgeW: 0.9 * u, edgeSeg: [grid[k][i], grid[k][j]],
+        decals: eq && i % 2 === 0 ? [{ shape: 'dot', r: 2.8 * u, col: '#b3121e' }] : null,
+      });
+    }
+    const yT = cy - ry * Math.sin(lat1), yB = cy + ry * Math.sin(lat1), rc = R * Math.cos(lat1) * 1.04;
+    const cap = (ya, yb, top) => {
+      const a = [], b = [];
+      for (let i = 0; i < nLon; i += 2) { const an = i * TAU / nLon; a.push(V3(md, Math.cos(an) * rc, ya, Math.sin(an) * rc)); b.push(V3(md, Math.cos(an) * rc, yb, Math.sin(an) * rc)); }
+      for (let i = 0; i < a.length; i++) { const j = (i + 1) % a.length; F3(md, [a[i], a[j], b[j], b[i]], { mat: 'card', col: '#2a1c14', out: [md.verts[a[i]][0], 0, md.verts[a[i]][2]] }); }
+      F3(md, top ? a : b, { mat: 'gold', col: '#c99a2e', out: [0, top ? -1 : 1, 0] });
+    };
+    cap(yT - 5 * u, yT + 2 * u, true);
+    cap(yB - 2 * u, yB + 6 * u, false);
+    md.hookY = yT - 5 * u; md.h = yB + 6 * u;
+    return md;
+  }
+  const modelCache = new Map();
+  function lanternModel(style, u) {
+    u = Math.round(u * 200) / 200;
+    const key = style + ':' + u; if (modelCache.has(key)) return modelCache.get(key);
+    if (modelCache.size > 30) modelCache.clear();
+    const md = [akashModel, starModel, globeModel][style](u); md.u = u; finalize(md); modelCache.set(key, md); return md;
+  }
+  function drawLanternModel(g, style, md, yaw, lvl, t) {
+    const st = LANTERN_STYLES[style], u = md.u, c = md.center, flick = 1 + Math.sin(t * 9.1) * 0.03 + Math.sin(t * 13.7) * 0.02;
+    g.strokeStyle = '#8c7a5a'; g.lineWidth = 1.4 * u; g.lineCap = 'round';
+    g.beginPath(); g.moveTo(0, 0); g.lineTo(0, md.hookY); g.stroke();
+    g.beginPath(); g.arc(0, 2.5 * u, 2.5 * u, 0, TAU); g.stroke();
+    if (!md.translucent && lvl > 0.01) { g.save(); g.globalCompositeOperation = 'lighter'; g.globalAlpha = lvl * flick * (style === 1 ? 0.75 : 0.5); const r = md.glowR; g.drawImage(glowSprite(st.light), c[0] - r, c[1] - r, r * 2, r * 2); g.restore(); }
+    drawModel(g, md, yaw, lvl, t, st.light);
+    if (style === 2) { // paper grain over the globe
+      g.save(); g.beginPath(); g.ellipse(c[0], c[1], md.R * 0.99, md.ry * 1.0, 0, 0, TAU); g.clip();
+      g.globalAlpha = 0.16; g.fillStyle = pat(g, 'paper'); g.fillRect(c[0] - md.R, c[1] - md.ry, md.R * 2, md.ry * 2); g.restore();
+    }
+    if (lvl > 0.01) { g.save(); g.globalCompositeOperation = 'lighter'; g.globalAlpha = lvl * flick * (md.translucent ? 0.42 : 0.3); const r = md.glowR * 1.15; g.drawImage(glowSprite(st.light), c[0] - r, c[1] - r, r * 2, r * 2); g.restore(); }
   }
 
   let lantern = null;
+  function lanternScaleMax(style, ropeLen) {
+    const md1 = lanternModel(style, U);
+    return Math.max(0.5, Math.min(2.6, (floorY - 24 * U - ropeLen) / md1.h, (W * 0.85) / md1.w));
+  }
   function buildLantern() {
-    const style = S.lantern, D = lanternDims(style, U);
+    const style = S.lantern, ropeLen = clamp(H * 0.17, 50 * U, 220 * U);
+    const sc = clamp(S.lanternScale || 1, 0.5, lanternScaleMax(style, ropeLen));
+    const md = lanternModel(style, U * sc), D = { w: md.w, h: md.h };
     const ax = clamp(W * (W < 700 ? 0.5 : 0.24), D.w * 0.7, W - D.w * 0.7);
-    const ropeLen = clamp(H * 0.17, 70 * U, 220 * U);
     const n = 10, seg = ropeLen / n;
     const rope = []; for (let i = 0; i <= n; i++) rope.push(P(ax, i * seg, 1));
     rope[0].pinned = true;
@@ -309,29 +476,12 @@
     const cons = []; for (let i = 0; i < n; i++) cons.push(C(rope[i], rope[i + 1], seg, true));
     cons.push(C(rope[n], top, 2, true));
     const body = C(top, bot, D.h);
-    const L = { style, D, rope, top, bot, cons, body, attached: true, on: lantern ? lantern.on : true, lvl: lantern ? lantern.lvl : 1, strips: [], tag: null, ropeLen, drag: null, cut: false };
-    // strips: paper ribbons alternating with gold / silver tinsel
-    const st = LANTERN_STYLES[style];
-    D.attach.forEach((a, i) => {
-      const type = i % 3 === 1 ? 'gold' : i % 3 === 2 ? 'silver' : 'paper';
-      const segs = 9, len = rand(9, 12.5) * U;
-      const pts = [], sc = [];
-      for (let k = 0; k <= segs; k++) pts.push(P(ax + a[0], top.y + a[1] + k * len, 1));
-      pts[0].pinned = true;
-      for (let k = 0; k < segs; k++) sc.push(C(pts[k], pts[k + 1], len, true));
-      L.strips.push({ pts, cons: sc, type, color: st.strips[i % st.strips.length], a, attached: true, width: (type === 'paper' ? 5.5 : 4) * U, seed: rand(0, 99) });
-    });
-    // tag: short string + card
-    {
-      const segs = 3, len = 9 * U, pts = [], sc = [];
-      for (let k = 0; k <= segs; k++) pts.push(P(ax + D.tag[0], top.y + D.tag[1] + k * len, k === segs ? 0.7 : 1));
-      pts[0].pinned = true;
-      for (let k = 0; k < segs; k++) sc.push(C(pts[k], pts[k + 1], len, true));
-      const card = P(pts[segs].x, pts[segs].y + 30 * U, 0.8);
-      sc.push(C(pts[segs], card, 30 * U));
-      L.tag = { pts, cons: sc, card, attached: true };
-    }
-    lantern = L;
+    lantern = { style, sc, md, D, rope, top, bot, cons, body, attached: true, on: true, lvl: 1, ropeLen, drag: null, yaw: 0.45, yawV: 0.006 };
+  }
+  function setLanternScale(sc) {
+    const L = lantern; if (!L) return;
+    sc = clamp(sc, 0.5, lanternScaleMax(L.style, L.ropeLen));
+    L.sc = sc; S.lanternScale = sc; L.md = lanternModel(L.style, U * sc); L.D = { w: L.md.w, h: L.md.h }; L.body.len = L.D.h;
   }
   function lanternFrame(L) {
     const dx = L.bot.x - L.top.x, dy = L.bot.y - L.top.y, d = Math.hypot(dx, dy) || 1;
@@ -341,7 +491,13 @@
   function lanternHit(x, y) {
     const L = lantern; if (!L) return false;
     const F = lanternFrame(L), [lx, ly] = F.toLocal(x, y);
-    return Math.abs(lx) < L.D.w * 0.52 && ly > -4 * U && ly < L.D.h * (L.style === 0 ? 0.9 : 1) + 2 * U;
+    return Math.abs(lx) < L.D.w * 0.5 && ly > L.md.hookY - 4 * U && ly < L.D.h + 2 * U;
+  }
+  function lanternBox() { // screen-space box around the kandil (for the resize handle)
+    const L = lantern, F = lanternFrame(L), w = L.D.w * 0.52, pad = 6;
+    let x0 = 1e9, y0 = 1e9, x1 = -1e9, y1 = -1e9;
+    for (const [lx, ly] of [[-w, L.md.hookY], [w, L.md.hookY], [w, L.D.h], [-w, L.D.h]]) { const [x, y] = F.toWorld(lx, ly); x0 = Math.min(x0, x); x1 = Math.max(x1, x); y0 = Math.min(y0, y); y1 = Math.max(y1, y); }
+    return { x0: x0 - pad, y0: y0 - pad, x1: x1 + pad, y1: y1 + pad, hx: x1 + pad, hy: y1 + pad };
   }
   function distSeg(px, py, a, b) {
     const vx = b.x - a.x, vy = b.y - a.y, wx = px - a.x, wy = py - a.y;
@@ -350,7 +506,7 @@
   }
   function snapLantern(why) {
     const L = lantern; if (!L || !L.attached) return;
-    L.attached = false; L.cut = true;
+    L.attached = false;
     L.cons = L.cons.filter((c) => c.b !== L.top);
     Snd.snap();
     for (let i = 0; i < 8; i++) addP({ x: L.top.x, y: L.top.y, vx: rand(-2, 2) * U, vy: rand(-2, 1) * U, max: 0.5, size: 1.5 * U, type: 'spark', color: '#fff2c0', g: 0.1 * U });
@@ -361,7 +517,7 @@
     const L = lantern; if (!L) return;
     L.lvl = lerp(L.lvl, L.on ? 1 : 0, 0.12);
     for (const p of L.rope) { integrate(p, 0.985); handTouch(p, 26 * U, 0.4); }
-    if (!(L.drag)) { integrate(L.top, 0.996); integrate(L.bot, 0.996); }
+    if (!L.drag) { integrate(L.top, 0.996); integrate(L.bot, 0.996); }
     else {
       integrate(L.bot, 0.99);
       let tx = M.x - L.drag.ox, ty = M.y - L.drag.oy;
@@ -375,95 +531,35 @@
       L.drag.tx = tx; L.drag.ty = ty;
       L.top.px = L.top.x; L.top.py = L.top.y; L.top.x = tx; L.top.y = ty;
     }
-    // light hand-brush on hanging lantern
-    if (!L.drag && L.attached) { handTouch(L.bot, L.D.w * 0.45, 0.06); }
-    const F0 = lanternFrame(L);
-    // strips & tag follow lantern
-    const pinStrip = (s, a) => { if (!s.attached) return; const [x, y] = F0.toWorld(a[0], a[1]); s.pts[0].x = s.pts[0].px = x; s.pts[0].y = s.pts[0].py = y; };
-    for (const s of L.strips) { pinStrip(s, s.a); for (const p of s.pts) { integrate(p, 0.975); handTouch(p, 34 * U, 0.6); } }
-    pinStrip(L.tag, L.D.tag); for (const p of L.tag.pts) integrate(p, 0.98); integrate(L.tag.card, 0.98); handTouch(L.tag.card, 30 * U, 0.5);
-    const allCons = [L.body, ...L.cons];
+    if (!L.drag && L.attached) handTouch(L.bot, L.D.w * 0.45, 0.06);
     for (let it = 0; it < 14; it++) {
-      for (const c of allCons) solve(c);
+      solve(L.body); for (const c of L.cons) solve(c);
       if (L.drag && L.drag.tx !== undefined) { L.top.x = L.drag.tx; L.top.y = L.drag.ty; }
       const r = L.D.w * 0.5; collide(L.top, r * (L.attached ? 0.6 : 0.9)); collide(L.bot, r);
     }
     for (const p of L.rope) collide(p, 1);
-    const F = lanternFrame(L);
-    for (const s of L.strips) {
-      if (s.attached) { const [x, y] = F.toWorld(s.a[0], s.a[1]); s.pts[0].x = x; s.pts[0].y = y; }
-      for (let it = 0; it < 6; it++) for (const c of s.cons) solve(c);
-      for (const p of s.pts) collide(p, 2 * U, 0.6, 0.1);
-    }
-    { const [x, y] = F.toWorld(L.D.tag[0], L.D.tag[1]); L.tag.pts[0].x = x; L.tag.pts[0].y = y; for (let it = 0; it < 6; it++) for (const c of L.tag.cons) solve(c); for (const p of L.tag.pts) collide(p, 2 * U); collide(L.tag.card, 10 * U, 0.6, 0.2); }
+    // torsion: the kandil twists slowly on its cord; swings and a brushing hand set it turning
+    const vxb = L.bot.x - L.bot.px, onFloor = L.bot.y > floorY - L.D.w * 0.55;
+    L.yawV += -0.0004 * (L.yaw - 0.45) + vxb * 0.00022 + Math.sin(now() * 0.37) * 0.00003;
+    if (M.inside && !L.drag && !(M.touch && !M.down) && lanternHit(M.x, M.y)) L.yawV += clamp(M.vx, -30, 30) * 0.0005;
+    L.yawV *= onFloor && !L.attached ? 0.9 : 0.995;
+    L.yaw += L.yawV;
   }
 
-  function drawStrip(s, t) {
-    const pts = s.pts;
-    if (s.type === 'paper') {
-      ctx.strokeStyle = s.color; ctx.lineWidth = s.width; ctx.lineCap = 'butt'; ctx.lineJoin = 'round';
-      ctx.beginPath(); ctx.moveTo(pts[0].x, pts[0].y);
-      for (let i = 1; i < pts.length - 1; i++) { const mx = (pts[i].x + pts[i + 1].x) / 2, my = (pts[i].y + pts[i + 1].y) / 2; ctx.quadraticCurveTo(pts[i].x, pts[i].y, mx, my); }
-      const e = pts[pts.length - 1]; ctx.lineTo(e.x, e.y); ctx.stroke();
-      // crease highlight
-      ctx.strokeStyle = 'rgba(255,255,255,0.18)'; ctx.lineWidth = s.width * 0.25; ctx.stroke();
-      // cut V tail
-      const p = pts[pts.length - 2], dx = e.x - p.x, dy = e.y - p.y, d = Math.hypot(dx, dy) || 1, nx = -dy / d, ny = dx / d;
-      ctx.fillStyle = s.color; ctx.beginPath(); ctx.moveTo(e.x + nx * s.width / 2, e.y + ny * s.width / 2); ctx.lineTo(e.x + dx / d * 6 * U + nx * s.width / 2, e.y + dy / d * 6 * U + ny * s.width / 2); ctx.lineTo(e.x, e.y + 0); ctx.lineTo(e.x + dx / d * 6 * U - nx * s.width / 2, e.y + dy / d * 6 * U - ny * s.width / 2); ctx.lineTo(e.x - nx * s.width / 2, e.y - ny * s.width / 2); ctx.fill();
-    } else {
-      const base = s.type === 'gold' ? ['#fff1a8', '#ffd23f', '#e6a817', '#fff8d6'] : ['#ffffff', '#d9e2ec', '#aab7c4', '#f4f8ff'];
-      ctx.lineCap = 'round';
-      for (let i = 0; i < pts.length - 1; i++) {
-        const a = pts[i], b = pts[i + 1], dx = b.x - a.x, dy = b.y - a.y, d = Math.hypot(dx, dy) || 1, nx = -dy / d, ny = dx / d;
-        ctx.strokeStyle = base[2]; ctx.lineWidth = 1.2 * U; ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
-        const n = 7;
-        for (let k = 0; k < n; k++) {
-          const f = k / n, x = a.x + dx * f, y = a.y + dy * f, h = Math.sin((i * n + k) * 12.9898 + s.seed) * 43758.5453;
-          const r = (h - Math.floor(h)), len = s.width * (0.8 + r * 0.9), sh = Math.sin(t * 6 + i * 1.7 + k * 2.3 + s.seed);
-          ctx.strokeStyle = base[(k + i) % 4]; ctx.lineWidth = 0.9 * U; ctx.globalAlpha = 0.65 + 0.35 * sh;
-          ctx.beginPath(); ctx.moveTo(x - nx * len, y - ny * len); ctx.lineTo(x + nx * len, y + ny * len); ctx.stroke();
-          if (sh > 0.93) { ctx.globalAlpha = 1; glow(x, y, 6 * U, base[0], 0.9); }
-        }
-        ctx.globalAlpha = 1;
-      }
-    }
-  }
   function drawRope(pts, color, w) {
     ctx.strokeStyle = color; ctx.lineWidth = w; ctx.lineCap = 'round';
     ctx.beginPath(); ctx.moveTo(pts[0].x, pts[0].y);
     for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i].x, pts[i].y);
     ctx.stroke();
   }
-  function wrapText(text, maxW) {
-    const words = String(text).split(/\s+/); const lines = []; let cur = '';
-    for (const w of words) { const t = cur ? cur + ' ' + w : w; if (ctx.measureText(t).width > maxW && cur) { lines.push(cur); cur = w; } else cur = t; }
-    if (cur) lines.push(cur); return lines.slice(0, 2);
-  }
   function drawLantern(t) {
     const L = lantern; if (!L) return;
     drawRope(L.rope, 'rgba(220,200,160,0.9)', 1.6 * U);
     if (L.attached) drawRope([L.rope[L.rope.length - 1], L.top], 'rgba(220,200,160,0.9)', 1.6 * U);
-    for (const s of L.strips) if (!s.front) drawStrip(s, t);
     const F = lanternFrame(L);
-    ctx.save(); ctx.translate(L.top.x, L.top.y); ctx.rotate(F.ang); drawLanternBody(ctx, L.style, U, L.lvl, t); ctx.restore();
-    // tag
-    const tg = L.tag; drawRope([...tg.pts], 'rgba(255,230,170,0.9)', 1 * U);
-    const last = tg.pts[tg.pts.length - 1], c = tg.card, ang = Math.atan2(-(c.x - last.x), c.y - last.y);
-    ctx.save(); ctx.translate(last.x, last.y); ctx.rotate(ang);
-    ctx.font = `600 ${13 * U}px "Nirmala UI","Noto Sans Devanagari","Segoe UI",system-ui,sans-serif`;
-    const lines = wrapText(S.tag || ' ', 96 * U);
-    const tw = Math.max(54 * U, ...lines.map((l) => ctx.measureText(l).width)) + 18 * U, th = (lines.length * 16 + 14) * U;
-    ctx.fillStyle = '#fff4dc'; ctx.strokeStyle = '#c99a2e'; ctx.lineWidth = 1.4 * U;
-    ctx.beginPath(); ctx.moveTo(-tw / 2 + 8 * U, 0); ctx.lineTo(tw / 2 - 8 * U, 0); ctx.lineTo(tw / 2, 8 * U); ctx.lineTo(tw / 2, th); ctx.lineTo(-tw / 2, th); ctx.lineTo(-tw / 2, 8 * U); ctx.closePath(); ctx.fill(); ctx.stroke();
-    ctx.fillStyle = '#c99a2e'; ctx.beginPath(); ctx.arc(0, 5 * U, 2.2 * U, 0, TAU); ctx.fill();
-    ctx.fillStyle = '#8a1c12'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-    lines.forEach((l, i) => ctx.fillText(l, 0, (16 + i * 16) * U));
-    ctx.restore();
-    L.tagBox = { x: last.x, y: last.y, w: tw, h: th, ang };
-    // floor light pool when lit and hanging
+    ctx.save(); ctx.translate(L.top.x, L.top.y); ctx.rotate(F.ang); drawLanternModel(ctx, L.style, L.md, L.yaw, L.lvl, t); ctx.restore();
     if (L.lvl > 0.05 && !DESKTOP) { const [cx] = F.toWorld(0, L.D.h * 0.5); ctx.save(); ctx.globalCompositeOperation = 'lighter'; ctx.globalAlpha = 0.18 * L.lvl; ctx.drawImage(glowSprite(LANTERN_STYLES[L.style].light), cx - 200 * U, floorY - 30 * U, 400 * U, 60 * U); ctx.restore(); }
   }
-
   // ======================================================================
   // STRING LIGHTS (laddi / jhalar)
   // ======================================================================
@@ -552,62 +648,139 @@
   function hslHex(h) { const s = 0.9, l = 0.6, k = (n) => (n + h / 30) % 12, a = s * Math.min(l, 1 - l), f = (n) => l - a * Math.max(-1, Math.min(k(n) - 3, Math.min(9 - k(n), 1))); const to = (v) => Math.round(v * 255).toString(16).padStart(2, '0'); return '#' + to(f(0)) + to(f(8)) + to(f(4)); }
 
   // ======================================================================
-  // DIYA (clay lamp)
+  // DIYA (clay lamp) - drawn in 3/4 view with the spout and flame facing the viewer
   // ======================================================================
   const DIYA_STYLES = [{ name: 'Classic Terracotta' }, { name: 'Painted Diya' }, { name: 'Lotus Diya' }];
+  const DIYA_H = [39, 39, 46]; // body height in diya units (hit box / resize handle)
   let diya = null;
+  const dS = () => U * (S.diyaScale || 1);
   function buildDiya() {
-    const x = diya ? clamp(diya.x, 60 * U, W - 60 * U) : W - 70 * U - (DESKTOP ? 30 : 0);
-    diya = { x, lit: diya ? diya.lit : true, lvl: diya ? diya.lvl : 1, lean: 0, wind: 0, drag: null, vx: 0 };
+    const s = dS(), x = diya ? clamp(diya.x, 44 * s, W - 44 * s) : W - 72 * s - (DESKTOP ? 30 : 0);
+    diya = { x, lit: diya ? diya.lit : true, lvl: diya ? diya.lvl : 1, lean: 0, wind: 0, drag: null, vx: 0, smoke: [], emit: 0, ember: 0, newRib: false };
   }
-  function diyaWick(style, u) { return style === 2 ? [0, -26 * u] : [37 * u, -22 * u]; }
-  function drawDiyaBody(g, style, u, lit, t) {
-    if (style === 2) {
-      // lotus
-      const petal = (ang, len, wid, col, edge) => { g.save(); g.rotate(ang); g.fillStyle = col; g.strokeStyle = edge; g.lineWidth = 1 * u; g.beginPath(); g.moveTo(0, 0); g.quadraticCurveTo(-wid, -len * 0.55, 0, -len); g.quadraticCurveTo(wid, -len * 0.55, 0, 0); g.fill(); g.stroke(); g.restore(); };
-      g.save(); g.translate(0, -6 * u);
-      for (const a of [-1.25, -0.75, 0.75, 1.25]) petal(a, 34 * u, 12 * u, '#e66a9a', '#b83b6c');
-      g.restore();
-      g.fillStyle = '#c99a2e'; g.beginPath(); g.ellipse(0, -18 * u, 20 * u, 6 * u, 0, 0, TAU); g.fill();
-      g.fillStyle = '#7a4a10'; g.beginPath(); g.ellipse(0, -18 * u, 16 * u, 4 * u, 0, 0, TAU); g.fill();
-      g.fillStyle = lit ? '#e8b84a' : '#a07a2a'; g.beginPath(); g.ellipse(0, -18 * u, 13 * u, 3 * u, 0, 0, TAU); g.fill();
-      g.save(); g.translate(0, -2 * u);
-      for (const a of [-0.95, -0.45, 0, 0.45, 0.95]) petal(a * 1.0, 26 * u, 10 * u, '#f7a8c6', '#c94f7f');
-      g.restore();
-      g.fillStyle = '#5e8f3e'; g.beginPath(); g.ellipse(0, -1 * u, 26 * u, 4 * u, 0, 0, TAU); g.fill();
-      g.strokeStyle = '#3b2412'; g.lineWidth = 2 * u; g.beginPath(); g.moveTo(0, -18 * u); g.lineTo(0, -26 * u); g.stroke();
-      return;
+  function diyaWick(style, s) { return style === 2 ? [0, -33 * s] : [0, -11 * s]; }
+  function diyaBox() { const s = dS(), hh = DIYA_H[S.diya] * s, pad = 6; return { x0: diya.x - 43 * s - pad, x1: diya.x + 43 * s + pad, y0: floorY - hh - pad, y1: floorY + 2, hx: diya.x + 43 * s + pad, hy: floorY - hh - pad }; }
+  function diyaHit(x, y) { if (!diya) return false; const b = diyaBox(); return x > b.x0 && x < b.x1 && y > b.y0 && y < b.y1 + 4; }
+  function setDiyaScale(sc) { S.diyaScale = clamp(sc, 0.5, Math.min(3, H * 0.35 / (DIYA_H[S.diya] * U))); const s = dS(); diya.x = clamp(diya.x, 44 * s, W - 44 * s); }
+
+  function ell(g, x, y, rx, ry) { g.beginPath(); g.ellipse(x, y, Math.max(0.1, rx), Math.max(0.1, ry), 0, 0, TAU); }
+  const CLAY = [
+    { lit: '#d8834a', mid: '#b05628', dark: '#56220c', lip1: '#dc8d55', lip2: '#7a3414', inner: '#6a2a10' },
+    { lit: '#e2493a', mid: '#b4241c', dark: '#560c08', lip1: '#f6cf5c', lip2: '#a3751a', inner: '#5a1a10', painted: true },
+  ];
+  function clayDiya(g, s, pal, lvl) {
+    const rimY = -25 * s, rx = 38 * s, ry = 12.5 * s, fy = -5 * s, fx = 17 * s;
+    g.fillStyle = 'rgba(0,0,0,0.45)'; ell(g, 0, 0.5 * s, 45 * s, 6.5 * s); g.fill(); // contact shadow
+    // outer bowl
+    g.beginPath(); g.moveTo(-rx, rimY);
+    g.bezierCurveTo(-rx * 0.97, rimY + 15 * s, -fx * 1.35, fy, -fx, fy);
+    g.ellipse(0, fy, fx, fx * 0.3, 0, Math.PI, 0, true);
+    g.bezierCurveTo(fx * 1.35, fy, rx * 0.97, rimY + 15 * s, rx, rimY);
+    g.ellipse(0, rimY, rx, ry, 0, 0, Math.PI, false);
+    g.closePath();
+    const gr = g.createLinearGradient(-rx, 0, rx, 0); gr.addColorStop(0, pal.lit); gr.addColorStop(0.42, pal.mid); gr.addColorStop(1, pal.dark);
+    g.fillStyle = gr; g.fill();
+    g.save(); g.clip();
+    const vg = g.createLinearGradient(0, rimY, 0, 1 * s); vg.addColorStop(0, 'rgba(0,0,0,0)'); vg.addColorStop(1, 'rgba(0,0,0,0.42)');
+    g.fillStyle = vg; g.fillRect(-rx, rimY, rx * 2, 30 * s);
+    const hl = g.createRadialGradient(-rx * 0.55, rimY + 8 * s, 0, -rx * 0.55, rimY + 8 * s, 16 * s); hl.addColorStop(0, 'rgba(255,230,200,0.22)'); hl.addColorStop(1, 'rgba(255,230,200,0)');
+    g.fillStyle = hl; g.fillRect(-rx, rimY, rx * 2, 30 * s);
+    if (pal.painted) paintedMotifs(g, s, rimY, rx);
+    g.globalAlpha = pal.painted ? 0.28 : 0.5; g.fillStyle = pat(g, 'clay'); g.fillRect(-rx, rimY - ry, rx * 2, 40 * s); g.globalAlpha = 1;
+    if (lvl > 0.02) { g.globalCompositeOperation = 'lighter'; const fl = g.createRadialGradient(0, -12 * s, 0, 0, -12 * s, 34 * s); fl.addColorStop(0, `rgba(255,150,60,${0.2 * lvl})`); fl.addColorStop(1, 'rgba(255,150,60,0)'); g.fillStyle = fl; g.fillRect(-rx, rimY, rx * 2, 30 * s); g.globalCompositeOperation = 'source-over'; }
+    g.restore();
+    // rim lip (top surface of the wall)
+    const rxi = rx - 4.6 * s, ryi = ry - 1.7 * s;
+    g.beginPath(); g.ellipse(0, rimY, rx, ry, 0, 0, TAU); g.ellipse(0, rimY + 0.4 * s, rxi, ryi, 0, 0, TAU, true);
+    const lg = g.createLinearGradient(-rx, 0, rx, 0); lg.addColorStop(0, pal.lip1); lg.addColorStop(1, pal.lip2);
+    g.fillStyle = lg; g.fill('evenodd');
+    if (pal.painted) { g.strokeStyle = 'rgba(255,240,200,0.5)'; g.lineWidth = 0.8 * s; ell(g, 0, rimY, rx - 2.2 * s, ry - 0.8 * s); g.stroke(); }
+    // inside of the bowl: the far wall catches the flame light
+    ell(g, 0, rimY + 0.4 * s, rxi, ryi);
+    const ig = g.createLinearGradient(0, rimY - ryi, 0, rimY + ryi); ig.addColorStop(0, mixHex(pal.inner, '#e07a30', 0.35 * lvl)); ig.addColorStop(1, '#1c0a04');
+    g.fillStyle = ig; g.fill();
+    // oil pool with the flame's reflection
+    ell(g, 0, rimY + 3.2 * s, rxi * 0.8, ryi * 0.62);
+    const og = g.createRadialGradient(0, rimY + 6 * s, 0, 0, rimY + 3.2 * s, rxi * 0.8); og.addColorStop(0, mixHex('#8a5e18', '#ffd27a', 0.6 * lvl)); og.addColorStop(1, '#3e2806');
+    g.fillStyle = og; g.fill();
+    if (lvl > 0.05) { g.fillStyle = `rgba(255,236,170,${0.55 * lvl})`; ell(g, 0, rimY + 6 * s, 5 * s, 1.3 * s); g.fill(); }
+    // spout, pinched toward the viewer
+    g.beginPath(); g.moveTo(-13 * s, -13.6 * s); g.quadraticCurveTo(-7 * s, -6.2 * s, 0, -4.6 * s); g.quadraticCurveTo(7 * s, -6.2 * s, 13 * s, -13.6 * s); g.closePath();
+    const sg = g.createLinearGradient(0, -14 * s, 0, -4.6 * s); sg.addColorStop(0, pal.lip1); sg.addColorStop(1, pal.mid);
+    g.fillStyle = sg; g.fill();
+    g.strokeStyle = 'rgba(40,12,2,0.55)'; g.lineWidth = 1.2 * s;
+    g.beginPath(); g.moveTo(-12 * s, -12.4 * s); g.quadraticCurveTo(-7 * s, -5.6 * s, 0, -4.2 * s); g.quadraticCurveTo(7 * s, -5.6 * s, 12 * s, -12.4 * s); g.stroke();
+    g.beginPath(); g.moveTo(-6.5 * s, -13.4 * s); g.quadraticCurveTo(-3 * s, -8 * s, 0, -7.2 * s); g.quadraticCurveTo(3 * s, -8 * s, 6.5 * s, -13.4 * s); g.closePath();
+    g.fillStyle = mixHex('#5a3c0e', '#c08a30', 0.5 * lvl); g.fill();
+    wick(g, 0, -7.4 * s, -11 * s, s);
+  }
+  function wick(g, x, yb, yt, s) {
+    g.lineCap = 'round';
+    g.strokeStyle = '#ece0c4'; g.lineWidth = 2.3 * s; g.beginPath(); g.moveTo(x, yb); g.lineTo(x, yt + 1.2 * s); g.stroke();
+    g.strokeStyle = '#22140c'; g.beginPath(); g.moveTo(x, yt + 1.2 * s); g.lineTo(x, yt); g.stroke();
+  }
+  function paintedMotifs(g, s, rimY, rx) {
+    g.strokeStyle = '#f2c14e'; g.lineWidth = 1.7 * s;
+    g.beginPath(); g.ellipse(0, rimY + 3.5 * s, rx * 0.97, 12 * s, 0, 0.06 * Math.PI, 0.94 * Math.PI); g.stroke();
+    g.beginPath(); g.ellipse(0, rimY + 13 * s, rx * 0.66, 8 * s, 0, 0.1 * Math.PI, 0.9 * Math.PI); g.stroke();
+    for (let i = 0; i <= 14; i++) { // white dots, smaller toward the sides where the bowl turns away
+      const a = lerp(0.1, 0.9, i / 14) * Math.PI, x = Math.cos(a) * rx * 0.86, y = rimY + 8.5 * s + Math.sin(a) * 10 * s, sz = (0.45 + 0.55 * Math.sin(a)) * 1.4 * s;
+      g.fillStyle = '#fff6e0'; g.beginPath(); g.arc(x, y, sz, 0, TAU); g.fill();
     }
-    const painted = style === 1;
-    const bodyCol = painted ? ['#d63a2a', '#8c1d14'] : ['#c4622f', '#7a3013'];
-    const gr = g.createLinearGradient(0, -20 * u, 0, 0); gr.addColorStop(0, bodyCol[0]); gr.addColorStop(1, bodyCol[1]);
-    // spout
-    g.fillStyle = bodyCol[1]; g.beginPath(); g.moveTo(22 * u, -20 * u); g.quadraticCurveTo(36 * u, -24 * u, 42 * u, -22 * u); g.quadraticCurveTo(36 * u, -14 * u, 22 * u, -10 * u); g.closePath(); g.fill();
-    // bowl
-    g.fillStyle = gr; g.beginPath(); g.moveTo(-32 * u, -18 * u); g.bezierCurveTo(-30 * u, -2 * u, -14 * u, 0, 0, 0); g.bezierCurveTo(16 * u, 0, 30 * u, -4 * u, 32 * u, -18 * u); g.closePath(); g.fill();
-    // rim + oil
-    g.fillStyle = painted ? '#e9b949' : '#9a4520'; g.beginPath(); g.ellipse(0, -18 * u, 32 * u, 7 * u, 0, 0, TAU); g.fill();
-    g.fillStyle = painted ? '#6d1a12' : '#4a1c0a'; g.beginPath(); g.ellipse(0, -18 * u, 28 * u, 5.4 * u, 0, 0, TAU); g.fill();
-    g.fillStyle = lit ? '#d9a63a' : '#8a6a28'; g.beginPath(); g.ellipse(2 * u, -17.6 * u, 22 * u, 3.6 * u, 0, 0, TAU); g.fill();
-    if (lit) { g.fillStyle = 'rgba(255,240,190,0.55)'; g.beginPath(); g.ellipse(14 * u, -18 * u, 6 * u, 1.3 * u, 0, 0, TAU); g.fill(); }
-    if (painted) {
-      g.fillStyle = '#fff3dc'; for (let i = -5; i <= 5; i++) { g.beginPath(); g.arc(i * 5 * u, -9 * u + Math.abs(i) * 0.45 * u, 1.3 * u, 0, TAU); g.fill(); }
-      g.fillStyle = '#2bb673'; for (const x of [-18, 0, 18]) { g.beginPath(); g.ellipse(x * u, -4 * u - Math.abs(x) * 0.12 * u, 3.2 * u, 1.6 * u, 0.4, 0, TAU); g.fill(); }
-      g.strokeStyle = '#ffd34d'; g.lineWidth = 1.2 * u; g.beginPath(); g.ellipse(0, -18 * u, 32 * u, 7 * u, 0, 0, TAU); g.stroke();
-    } else {
-      g.strokeStyle = 'rgba(255,190,140,0.25)'; g.lineWidth = 1 * u; g.beginPath(); g.moveTo(-24 * u, -8 * u); g.quadraticCurveTo(0, -3 * u, 24 * u, -9 * u); g.stroke();
+    for (let i = 0; i <= 8; i++) {
+      const a = lerp(0.15, 0.85, i / 8) * Math.PI, x = Math.cos(a) * rx * 0.62, y = rimY + 17 * s + Math.sin(a) * 4.5 * s, sq = Math.sin(a);
+      g.fillStyle = '#2fae66'; g.beginPath(); g.ellipse(x, y, 3.4 * s * sq + 0.6 * s, 1.5 * s, -Math.cos(a) * 0.7, 0, TAU); g.fill();
     }
-    // wick
-    g.strokeStyle = '#f2e6cf'; g.lineWidth = 2.2 * u; g.beginPath(); g.moveTo(30 * u, -19 * u); g.lineTo(37 * u, -22 * u); g.stroke();
-    g.strokeStyle = '#2a1a10'; g.lineWidth = 2.2 * u; g.beginPath(); g.moveTo(36 * u, -21.6 * u); g.lineTo(37.5 * u, -22.4 * u); g.stroke();
+  }
+  function lotusDiya(g, s, lvl) {
+    g.fillStyle = 'rgba(0,0,0,0.45)'; ell(g, 0, 0.5 * s, 42 * s, 6.5 * s); g.fill();
+    g.fillStyle = '#2b5420'; ell(g, 0, -2 * s, 37 * s, 9 * s); g.fill(); // leaf platter edge
+    const pg = g.createLinearGradient(-36 * s, 0, 36 * s, 0); pg.addColorStop(0, '#79b84c'); pg.addColorStop(1, '#3d6e28');
+    g.fillStyle = pg; ell(g, 0, -4 * s, 35.5 * s, 8.4 * s); g.fill();
+    g.strokeStyle = 'rgba(30,60,20,0.5)'; g.lineWidth = 0.7 * s;
+    for (let i = 0; i < 12; i++) { const a = i * TAU / 12; g.beginPath(); g.moveTo(0, -4 * s); g.lineTo(Math.cos(a) * 33 * s, -4 * s + Math.sin(a) * 7.8 * s); g.stroke(); }
+    const K = 0.34, petals = [];
+    const ring = (n, R0, yb, len, wid, off, cBase, cTip) => { for (let i = 0; i < n; i++) { const th = off + i * TAU / n; petals.push({ th, R0, yb, len, wid, z: Math.sin(th) * R0, cBase, cTip }); } };
+    ring(10, 22 * s, -6 * s, 30 * s, 11 * s, 0.1, '#d23f78', '#ffd3e4');
+    ring(8, 13 * s, -12 * s, 25 * s, 9 * s, 0.1 + TAU / 16, '#e2588e', '#fff0f5');
+    petals.sort((a, b) => a.z - b.z);
+    const drawPetal = (p) => {
+      const c = Math.cos(p.th), sn = Math.sin(p.th), R1 = p.R0 + p.len * 0.42;
+      const bx = c * p.R0, by = p.yb + sn * p.R0 * K, tx = c * R1, ty = p.yb - p.len * 0.88 + sn * R1 * K;
+      const wv = p.wid * (0.3 + 0.7 * Math.abs(sn)) + p.wid * 0.12;
+      const dx = tx - bx, dy = ty - by, dl = Math.hypot(dx, dy) || 1, nx = -dy / dl, ny = dx / dl;
+      g.beginPath(); g.moveTo(bx, by);
+      g.bezierCurveTo(bx + nx * wv, by + ny * wv, tx + nx * wv * 0.55 - dx * 0.15, ty + ny * wv * 0.55 - dy * 0.15, tx, ty);
+      g.bezierCurveTo(tx - nx * wv * 0.55 - dx * 0.15, ty - ny * wv * 0.55 - dy * 0.15, bx - nx * wv, by - ny * wv, bx, by);
+      const f = 0.68 + 0.3 * Math.cos(p.th - Math.PI) * 0.5 + 0.15 + (sn < 0 ? 0.22 : 0.06) * lvl;
+      const gr = g.createLinearGradient(bx, by, tx, ty); gr.addColorStop(0, shade(p.cBase, f * 0.85)); gr.addColorStop(1, shade(p.cTip, f));
+      g.fillStyle = gr; g.fill();
+      g.strokeStyle = shade(p.cBase, 0.55); g.lineWidth = 0.7 * s; g.stroke();
+      g.strokeStyle = 'rgba(255,255,255,0.28)'; g.beginPath(); g.moveTo(bx, by); g.quadraticCurveTo((bx + tx) / 2 + nx * wv * 0.1, (by + ty) / 2, tx, ty); g.stroke();
+    };
+    for (const p of petals) if (p.z < 0) drawPetal(p);
+    // brass cup holding the oil and wick
+    g.beginPath(); g.moveTo(-14 * s, -30 * s); g.bezierCurveTo(-13 * s, -24 * s, -7 * s, -20.5 * s, 0, -20.5 * s); g.bezierCurveTo(7 * s, -20.5 * s, 13 * s, -24 * s, 14 * s, -30 * s);
+    g.ellipse(0, -30 * s, 14 * s, 4.8 * s, 0, 0, Math.PI, false); g.closePath();
+    const bg = g.createLinearGradient(-14 * s, 0, 14 * s, 0); bg.addColorStop(0, '#f6d57a'); bg.addColorStop(0.35, '#d9a640'); bg.addColorStop(1, '#6b4710');
+    g.fillStyle = bg; g.fill();
+    g.beginPath(); g.ellipse(0, -30 * s, 14 * s, 4.8 * s, 0, 0, TAU); g.ellipse(0, -29.8 * s, 11.6 * s, 3.7 * s, 0, 0, TAU, true);
+    const rg = g.createLinearGradient(-14 * s, 0, 14 * s, 0); rg.addColorStop(0, '#fff0b0'); rg.addColorStop(1, '#a8761c'); g.fillStyle = rg; g.fill('evenodd');
+    ell(g, 0, -29.8 * s, 11.6 * s, 3.7 * s); const ig = g.createLinearGradient(0, -33.5 * s, 0, -26 * s); ig.addColorStop(0, mixHex('#6b4a14', '#ffb04a', 0.5 * lvl)); ig.addColorStop(1, '#1c1004'); g.fillStyle = ig; g.fill();
+    ell(g, 0, -28.6 * s, 8.6 * s, 2.3 * s); g.fillStyle = mixHex('#7a5416', '#ffd27a', 0.55 * lvl); g.fill();
+    wick(g, 0, -28.8 * s, -33 * s, s);
+    for (const p of petals) if (p.z >= 0) drawPetal(p);
+  }
+  function drawDiyaBody(g, style, s, lvl) {
+    if (style === 2) lotusDiya(g, s, lvl); else clayDiya(g, s, CLAY[style], lvl);
   }
   function drawFlame(g, x, y, u, lvl, lean, t) {
     if (lvl < 0.02) return;
     const fl = 1 + Math.sin(t * 11.3) * 0.06 + Math.sin(t * 17.9 + 1) * 0.05 + Math.sin(t * 5.1) * 0.04;
-    const h = 30 * u * lvl * fl, w = 8.5 * u * lvl, tipX = x + lean * h * 0.9 + Math.sin(t * 7.7) * 1.2 * u;
+    const h = 30 * u * lvl * fl, w = 8 * u * lvl, tipX = x + lean * h * 0.8 + Math.sin(t * 7.7) * 0.8 * u;
     g.save(); g.globalCompositeOperation = 'lighter';
-    g.globalAlpha = 0.85 * lvl; g.drawImage(glowSprite('#ff9d2e'), x - 90 * u, y - h * 0.5 - 90 * u, 180 * u, 180 * u);
-    g.globalAlpha = 0.6 * lvl; g.drawImage(glowSprite('#ffd27a'), x - 30 * u, y - h * 0.6 - 30 * u, 60 * u, 60 * u);
+    g.globalAlpha = 0.5 * lvl; g.drawImage(glowSprite('#ff9d2e'), x - 75 * u, y - h * 0.6 - 75 * u, 150 * u, 150 * u);
+    g.globalAlpha = 0.42 * lvl; g.drawImage(glowSprite('#ffd27a'), x - 26 * u, y - h * 0.6 - 26 * u, 52 * u, 52 * u);
     g.restore();
     const shape = (sc, col) => { g.fillStyle = col; g.beginPath(); g.moveTo(x - w * sc, y); g.bezierCurveTo(x - w * sc * 1.15, y - h * sc * 0.45, lerp(x, tipX, 0.6) - w * sc * 0.3, y - h * sc * 0.75, lerp(x, tipX, sc), y - h * sc); g.bezierCurveTo(lerp(x, tipX, 0.6) + w * sc * 0.3, y - h * sc * 0.75, x + w * sc * 1.15, y - h * sc * 0.45, x + w * sc, y); g.quadraticCurveTo(x, y + w * sc * 0.7, x - w * sc, y); g.fill(); };
     g.globalAlpha = lvl;
@@ -615,29 +788,79 @@
     g.fillStyle = 'rgba(90,140,255,0.55)'; g.beginPath(); g.ellipse(x, y - 1.5 * u, w * 0.45, w * 0.35, 0, 0, TAU); g.fill();
     g.globalAlpha = 1;
   }
-  function diyaHit(x, y) { return diya && Math.abs(x - diya.x) < 46 * U && y > floorY - 64 * U && y < floorY + 4; }
+  function putOutDiya(reason) {
+    const d = diya; if (!d.lit) return;
+    d.lit = false; d.emit = 4; d.ember = 1; d.newRib = true; Snd.puff();
+    if (reason) showHint(reason, 2400);
+  }
+  function lightDiya() {
+    const d = diya, s = dS(), [wx, wy] = diyaWick(S.diya, s);
+    d.lit = true; d.emit = 0; Snd.fizz();
+    addP({ x: d.x + wx, y: floorY + wy - 10 * s, vx: 0, vy: 0, max: 0.3, type: 'flash', size: 50 * s, color: '#ffcf70' });
+  }
   function updateDiya(dt, t) {
-    const d = diya;
-    d.lvl = lerp(d.lvl, d.lit ? 1 : 0, d.lit ? 0.08 : 0.25);
-    if (d.drag) { const nx = clamp(M.x - d.drag.ox, 46 * U, W - 46 * U); d.vx = nx - d.x; d.x = nx; }
-    else { d.vx *= 0.85; }
-    // wind from hand / motion bends the flame (it lags behind motion)
-    const [wx, wy] = diyaWick(S.diya, U), fx = d.x + wx, fy = floorY + wy;
-    let wind = -d.vx * 0.06;
-    if (M.inside && !(M.touch && !M.down)) { const dd = Math.hypot(M.x - fx, M.y - (fy - 20 * U)); if (dd < 160 * U) wind += clamp(M.vx, -30, 30) * 0.02 * (1 - dd / (160 * U)); }
+    const d = diya, s = dS();
+    d.lvl = lerp(d.lvl, d.lit ? 1 : 0, d.lit ? 0.08 : 0.3);
+    if (d.drag) { const nx = clamp(M.x - d.drag.ox, 44 * s, W - 44 * s); d.vx = nx - d.x; d.x = nx; } else d.vx *= 0.85;
+    const [wx, wy] = diyaWick(S.diya, s), fx = d.x + wx, fy = floorY + wy;
+    let wind = -d.vx * 0.05;
+    if (M.inside && !(M.touch && !M.down)) { const dd = Math.hypot(M.x - fx, M.y - (fy - 20 * s)); if (dd < 160 * U) wind += clamp(M.vx, -30, 30) * 0.02 * (1 - dd / (160 * U)); }
     d.wind = lerp(d.wind, wind, 0.2);
-    d.lean = clamp(lerp(d.lean, d.wind, 0.15), -0.9, 0.9);
-    if (d.lit && Math.abs(d.wind) > 0.75 && !d.drag) { d.lit = false; Snd.puff(); smoke(fx, fy - 4 * U, 10); showHint('Whoosh! Too much wind. Click the diya to light it again.', 2400); }
-    if (!d.lit && d.lvl > 0.05 && Math.random() < 0.3) smoke(fx, fy - 4 * U, 1);
-    if (d.lit && Math.random() < 0.02) addP({ x: fx, y: fy - 22 * U, vx: rand(-0.2, 0.2), vy: -rand(0.4, 0.8) * U, max: 0.7, size: 0.9 * U, color: '#ffcf70', g: -0.005 });
+    d.lean = clamp(lerp(d.lean, d.wind * 0.6, 0.15), -0.3, 0.3); // the flame stays upright, facing forward
+    if (d.lit && Math.abs(d.wind) > 0.75 && !d.drag) putOutDiya('Whoosh! Too much wind. Click the diya to light it again.');
+    d.ember = Math.max(0, d.ember - dt * 0.42);
+    // a thin ribbon of soot-grey smoke rising from the hot wick, curling as it climbs
+    if (d.emit > 0) {
+      d.emit -= dt;
+      d.smoke.push({ x: fx + d.vx * 0.2, y: fy - 1.5 * s, vx: d.vx * 0.3 + rand(-0.03, 0.03) * U, vy: -0.75 * U * (0.7 + 0.3 * (S.diyaScale || 1)), age: 0, str: clamp(d.emit / 4, 0, 1), brk: d.newRib, w: s });
+      d.newRib = false;
+    }
+    for (let i = d.smoke.length - 1; i >= 0; i--) {
+      const p = d.smoke[i]; p.age += dt;
+      if (p.age > 4.2) { d.smoke.splice(i, 1); if (d.smoke[i]) d.smoke[i].brk = true; continue; }
+      const curl = Math.min(1, p.age * 1.2);
+      p.vy = p.vy * 0.994 - 0.004 * U;
+      p.vx = p.vx * 0.95 + (Math.sin(p.y * 0.045 / U + t * 1.3 + p.age * 1.7) * 0.014 + Math.sin(p.y * 0.12 / U - t * 2.1) * 0.008) * U * curl + d.wind * 0.012 * U;
+      p.x += p.vx; p.y += p.vy;
+    }
+    if (d.lit && Math.random() < 0.02) addP({ x: fx, y: fy - 22 * s, vx: rand(-0.2, 0.2), vy: -rand(0.4, 0.8) * U, max: 0.7, size: 0.9 * s, color: '#ffcf70', g: -0.005 });
+  }
+  function drawDiyaSmoke(d) {
+    const pts = d.smoke; if (pts.length < 2) return;
+    ctx.save();
+    // soft body of the plume: overlapping blurred puffs along the rising ribbon
+    const spr = glowSprite('#cfcac4');
+    for (let i = 1; i < pts.length; i++) {
+      const p = pts[i], q = pts[i - 1];
+      const life = Math.pow(1 - p.age / 4.2, 1.3) * (0.35 + 0.65 * p.str) * Math.min(1, p.age * 5 + 0.3);
+      const r = (1.6 + p.age * 7.5) * p.w, gap = p.brk ? r : Math.hypot(p.x - q.x, p.y - q.y);
+      const a = 0.75 * life * Math.min(1, (gap + 0.4) / (r * 0.45));
+      if (a < 0.004) continue;
+      ctx.globalAlpha = a; ctx.drawImage(spr, p.x - r, p.y - r, r * 2, r * 2);
+    }
+    // the thin thread of soot right above the wick
+    ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+    for (let i = 1; i < pts.length; i++) {
+      const p = pts[i], q = pts[i - 1]; if (p.brk || p.age > 1.6) continue;
+      const g = Math.round(lerp(90, 190, p.age / 1.6));
+      ctx.globalAlpha = 0.55 * (1 - p.age / 1.6) * (0.4 + 0.6 * p.str);
+      ctx.strokeStyle = `rgb(${g},${g - 4},${g - 8})`; ctx.lineWidth = (0.9 + p.age * 1.4) * p.w;
+      ctx.beginPath(); ctx.moveTo(q.x, q.y); ctx.lineTo(p.x, p.y); ctx.stroke();
+    }
+    ctx.restore();
   }
   function drawDiya(t) {
-    const d = diya, [wx, wy] = diyaWick(S.diya, U);
-    if (d.lvl > 0.03) { ctx.save(); ctx.globalCompositeOperation = 'lighter'; ctx.globalAlpha = 0.5 * d.lvl; ctx.drawImage(glowSprite('#ff9d2e'), d.x - 110 * U, floorY - 26 * U, 220 * U, 40 * U); ctx.restore(); }
-    ctx.save(); ctx.translate(d.x, floorY); drawDiyaBody(ctx, S.diya, U, d.lvl > 0.3, t); ctx.restore();
-    drawFlame(ctx, d.x + wx, floorY + wy, U, d.lvl, d.lean, t);
+    const d = diya, s = dS(), [wx, wy] = diyaWick(S.diya, s), fx = d.x + wx, fy = floorY + wy;
+    if (d.lvl > 0.03) { ctx.save(); ctx.globalCompositeOperation = 'lighter'; ctx.globalAlpha = 0.5 * d.lvl; ctx.drawImage(glowSprite('#ff9d2e'), d.x - 120 * s, floorY - 26 * s, 240 * s, 40 * s); ctx.restore(); }
+    ctx.save(); ctx.translate(d.x, floorY); drawDiyaBody(ctx, S.diya, s, d.lvl); ctx.restore();
+    drawFlame(ctx, fx, fy, s, d.lvl, d.lean, t);
+    if (!d.lit && d.ember > 0.01) { // glowing wick tip cooling down
+      const e = d.ember * (0.75 + 0.25 * Math.sin(t * 23));
+      ctx.save(); ctx.globalCompositeOperation = 'lighter'; glow(fx, fy - 0.5 * s, 7 * s, '#ff5a1f', e); ctx.restore();
+      ctx.fillStyle = `rgba(255,${Math.round(90 + 90 * d.ember)},40,${d.ember})`; ctx.beginPath(); ctx.arc(fx, fy - 0.5 * s, 1.3 * s, 0, TAU); ctx.fill();
+    }
+    drawDiyaSmoke(d);
   }
-
   // ======================================================================
   // CRACKERS
   // ======================================================================
@@ -654,9 +877,9 @@
   function shockwave(x, y, power) {
     const R = 240 * U * power;
     const kick = (p) => { if (p.pinned) return; const dx = p.x - x, dy = p.y - y, d = Math.hypot(dx, dy) || 1; if (d > R) return; const f = (1 - d / R) * 14 * U * power; p.x += dx / d * f; p.y += dy / d * f - f * 0.3; };
-    if (lantern) { for (const s of lantern.strips) s.pts.forEach(kick); lantern.rope.forEach(kick); kick(lantern.bot); kick(lantern.tag.card); }
+    if (lantern) { lantern.rope.forEach(kick); kick(lantern.bot); lantern.yawV += rand(-0.03, 0.03) * power; }
     lights.pts.forEach(kick); lights.bulbs.forEach((b) => kick(b.b));
-    if (diya && Math.abs(diya.x - x) < R) { diya.wind += (diya.x > x ? 1 : -1) * 1.5 * power * (1 - Math.abs(diya.x - x) / R); }
+    if (diya && Math.abs(diya.x - x) < R) { diya.wind += (diya.x > x ? 1 : -1) * 1.5 * power * (1 - Math.abs(diya.x - x) / R); if (diya.wind > 0.75 || diya.wind < -0.75) putOutDiya('The blast blew out the diya. Click it to light it again.'); }
     shake = Math.max(shake, 10 * U * power);
     addP({ x, y, vx: 0, vy: 0, max: 0.5, type: 'shock', size: R, color: '#ffe0a0' });
   }
@@ -737,7 +960,7 @@
   }
   function shockwaveLite(x, y) {
     const R = 70 * U; const kick = (p) => { if (p.pinned) return; const dx = p.x - x, dy = p.y - y, d = Math.hypot(dx, dy) || 1; if (d > R) return; const f = (1 - d / R) * 4 * U; p.x += dx / d * f; p.y += dy / d * f - f * 0.5; };
-    if (lantern) for (const s of lantern.strips) if (!s.attached || lantern.bot.y > floorY - 80 * U) s.pts.forEach(kick);
+    if (lantern && lantern.bot.y > floorY - 80 * U) kick(lantern.bot);
     shake = Math.max(shake, 2 * U);
   }
   function drawCrackers(t) {
@@ -822,18 +1045,12 @@
     M.x = nx; M.y = ny; M.inside = true; M.touch = e.pointerType === 'touch';
   }
   function interactiveAt(x, y) {
-    if (lantern && (lanternHit(x, y) || nearLanternThings(x, y, 14 * U))) return true;
+    if (handleAt(x, y)) return true;
+    if (lantern && (lanternHit(x, y) || cordAt(x, y))) return true;
     if (diyaHit(x, y)) return true;
     if (lights && bulbAt(x, y)) return true;
     if (lights && y < 140 * U && lights.pts.some((p) => Math.hypot(p.x - x, p.y - y) < 40 * U)) return true;
     for (const c of crackers) if (Math.abs(c.x - x) < 40 * U && y > c.y - 60 * U) return true;
-    return false;
-  }
-  function nearLanternThings(x, y, r) {
-    const L = lantern;
-    for (const s of L.strips) for (let i = 0; i < s.pts.length - 1; i++) if (distSeg(x, y, s.pts[i], s.pts[i + 1]) < r) return true;
-    for (let i = 0; i < L.rope.length - 1; i++) if (distSeg(x, y, L.rope[i], L.rope[i + 1]) < r) return true;
-    if (L.tagBox && Math.hypot(x - L.tag.card.x, y - L.tag.card.y) < 40 * U) return true;
     return false;
   }
   function bulbAt(x, y) {
@@ -841,11 +1058,56 @@
     for (const b of lights.bulbs) { const d = Math.hypot(b.b.x - x, b.b.y + 4 * U - y); if (d < bd) { bd = d; best = b; } }
     return best;
   }
-  function stripAt(x, y, reach) {
-    if (!lantern) return null;
-    let best = null, bd = reach || 9 * U;
-    for (const s of lantern.strips) for (let i = 0; i < s.pts.length - 1; i++) { const d = distSeg(x, y, s.pts[i], s.pts[i + 1]); if (d < bd) { bd = d; best = s; } }
-    return best;
+  // ---- diagonal resize handles (kandil: bottom-right corner, diya: top-right corner) ----
+  const RS = { lan: 0, diya: 0, touchObj: null, touchUntil: 0, active: null, start: null };
+  const handleR = () => (M.touch ? 24 : 13);
+  function inBox(b, x, y, pad) { return x > b.x0 - pad && x < b.x1 + pad && y > b.y0 - pad && y < b.y1 + pad; }
+  function handleAt(x, y) {
+    if (lantern && RS.lan > 0.3) { const b = lanternBox(); if (Math.hypot(x - b.hx, y - b.hy) < handleR()) return 'lantern'; }
+    if (diya && RS.diya > 0.3) { const b = diyaBox(); if (Math.hypot(x - b.hx, y - b.hy) < handleR()) return 'diya'; }
+    return null;
+  }
+  function updateHandles() {
+    const mouse = M.inside && !M.touch, tn = now();
+    const lanDragging = lantern && lantern.drag && !lantern.drag.pending, diyaDragging = diya && diya.drag && !diya.drag.pending;
+    const wantL = RS.active === 'lantern' || (!RS.active && !lanDragging && ((mouse && lantern && inBox(lanternBox(), M.x, M.y, 18)) || (RS.touchObj === 'lantern' && tn < RS.touchUntil)));
+    const wantD = RS.active === 'diya' || (!RS.active && !diyaDragging && ((mouse && inBox(diyaBox(), M.x, M.y, 18)) || (RS.touchObj === 'diya' && tn < RS.touchUntil)));
+    RS.lan = lerp(RS.lan, wantL ? 1 : 0, 0.18); RS.diya = lerp(RS.diya, wantD ? 1 : 0, 0.18);
+  }
+  function drawHandle(b, a, dir) {
+    if (a < 0.02) return;
+    ctx.save(); ctx.globalAlpha = a;
+    ctx.strokeStyle = 'rgba(255,225,160,0.4)'; ctx.lineWidth = 1; ctx.setLineDash([4, 5]);
+    ctx.strokeRect(b.x0, b.y0, b.x1 - b.x0, b.y1 - b.y0); ctx.setLineDash([]);
+    const r = M.touch ? 13 : 10, x = b.hx, y = b.hy;
+    ctx.fillStyle = 'rgba(30,16,46,0.88)'; ctx.strokeStyle = '#ffcf5a'; ctx.lineWidth = 1.5;
+    ctx.beginPath(); ctx.arc(x, y, r, 0, TAU); ctx.fill(); ctx.stroke();
+    const k = r * 0.48, sy = dir === 'down' ? 1 : -1; // diagonal double arrow
+    ctx.beginPath(); ctx.moveTo(x - k, y - k * sy); ctx.lineTo(x + k, y + k * sy);
+    ctx.moveTo(x + k, y + k * sy); ctx.lineTo(x + k * 0.1, y + k * sy); ctx.moveTo(x + k, y + k * sy); ctx.lineTo(x + k, y + k * sy * 0.1);
+    ctx.moveTo(x - k, y - k * sy); ctx.lineTo(x - k * 0.1, y - k * sy); ctx.moveTo(x - k, y - k * sy); ctx.lineTo(x - k, y - k * sy * 0.1);
+    ctx.stroke(); ctx.restore();
+  }
+  function drawHandles() {
+    if (lantern) drawHandle(lanternBox(), RS.lan, 'down');
+    if (diya) drawHandle(diyaBox(), RS.diya, 'up');
+  }
+  function resizeMove() {
+    const st = RS.start; if (!st) return;
+    const f = Math.hypot(M.x - st.ax, M.y - st.ay) / st.d0, sc = Math.round(st.scale * f * 100) / 100;
+    if (RS.active === 'lantern') setLanternScale(sc); else setDiyaScale(sc);
+  }
+  function updateCursor() {
+    let c = 'default';
+    if (sparklerActive()) c = 'none';
+    else if (RS.active) c = RS.active === 'lantern' ? 'nwse-resize' : 'nesw-resize';
+    else if (M.inside && !M.touch) {
+      const h = handleAt(M.x, M.y);
+      if (h) c = h === 'lantern' ? 'nwse-resize' : 'nesw-resize';
+      else if ((lantern && lanternHit(M.x, M.y)) || diyaHit(M.x, M.y)) c = press && press.moved ? 'grabbing' : 'grab';
+      else if ((lights && bulbAt(M.x, M.y)) || cordAt(M.x, M.y)) c = 'pointer';
+    }
+    if (cvs.style.cursor !== c) cvs.style.cursor = c;
   }
   function cordAt(x, y) {
     const L = lantern; if (!L || !L.attached) return false;
@@ -859,20 +1121,29 @@
     try { cvs.setPointerCapture(e.pointerId); } catch (_) { /* ignore */ }
     const x = e.clientX, y = e.clientY;
     press = { x, y, t: now(), target: null, moved: false };
+    const h = handleAt(x, y);
+    if (h) {
+      press.target = 'resize'; RS.active = h;
+      const ax = h === 'lantern' ? lantern.top.x : diya.x, ay = h === 'lantern' ? lantern.top.y : floorY;
+      RS.start = { ax, ay, d0: Math.max(20, Math.hypot(x - ax, y - ay)), scale: h === 'lantern' ? lantern.sc : (S.diyaScale || 1) };
+      return;
+    }
     if (diyaHit(x, y)) press.target = 'diya';
-    else if (stripAt(x, y, 6 * U)) press.target = 'strip';
     else if (lantern && lanternHit(x, y)) press.target = 'lantern';
+    if (press.target && M.touch) { RS.touchObj = press.target; RS.touchUntil = now() + 4; }
     if (press.target === 'lantern') { const L = lantern; L.drag = { ox: x - L.top.x, oy: y - L.top.y, started: false, pending: true }; }
     if (press.target === 'diya') diya.drag = { ox: x - diya.x, pending: true };
   });
   cvs.addEventListener('pointermove', (e) => {
     setPointer(e);
     if (press && Math.hypot(e.clientX - press.x, e.clientY - press.y) > 6) press.moved = true;
+    if (press && press.target === 'resize') resizeMove();
     if (DESKTOP && window.desktop && window.desktop.setIgnore) reportHit();
   });
   function endPress(e) {
     if (!press) { M.down = false; return; }
     const x = e.clientX, y = e.clientY, p = press; press = null; M.down = false;
+    if (p.target === 'resize') { RS.active = null; RS.start = null; save(); if (M.touch) { RS.touchUntil = now() + 3; M.inside = false; } return; }
     const L = lantern;
     if (L && L.drag) {
       if (p.moved) { const v = avgVel(); L.top.px = L.top.x - v[0]; L.top.py = L.top.y - v[1]; }
@@ -899,18 +1170,8 @@
       sparkler.until = now() + sparkler.total;
       return;
     }
-    if (target === 'diya') {
-      diya.lit = !diya.lit; const [wx, wy] = diyaWick(S.diya, U);
-      if (!diya.lit) { Snd.puff(); smoke(diya.x + wx, floorY + wy - 4 * U, 12); }
-      else { Snd.fizz(); addP({ x: diya.x + wx, y: floorY + wy - 10 * U, vx: 0, vy: 0, max: 0.3, type: 'flash', size: 50 * U, color: '#ffcf70' }); }
-      return;
-    }
+    if (target === 'diya') { if (diya.lit) putOutDiya(); else lightDiya(); return; }
     if (target === 'lantern') { lantern.on = !lantern.on; Snd.click(); return; }
-    const s = stripAt(x, y);
-    if (s) {
-      if (s.attached) { s.attached = false; s.pts[0].pinned = false; s.pts.forEach((p) => { p.px = p.x - rand(-1, 1); }); Snd.snap(); }
-      return;
-    }
     if (cordAt(x, y)) { snapLantern('You cut the cord. The kandil drops.'); return; }
     const b = lights && bulbAt(x, y);
     if (b) { b.on = !b.on; Snd.click(); return; }
@@ -969,8 +1230,8 @@
     const g = c.getContext('2d'); g.setTransform(d, 0, 0, d, 0, 0); g.clearRect(0, 0, w, h); return [g, w, h];
   }
   function thumbLantern(c, i, t) {
-    const [g, w, h] = prepThumb(c), D = lanternDims(i, 1), s = Math.min((h - 6) / D.h, (w - 10) / D.w) * 0.95;
-    g.save(); g.translate(w / 2, 3 + Math.sin(t * 1.5 + i) * 1); g.rotate(Math.sin(t * 1.3 + i) * 0.05); drawLanternBody(g, i, s, 1, t); g.restore();
+    const [g, w, h] = prepThumb(c), m1 = lanternModel(i, 1), s = Math.min((h - 6) / m1.h, (w - 10) / m1.w) * 0.95, md = lanternModel(i, s);
+    g.save(); g.translate(w / 2, 3); g.rotate(Math.sin(t * 1.3 + i) * 0.04); drawLanternModel(g, i, md, 0.45 + Math.sin(t * 0.7 + i) * 0.6, 1, t); g.restore();
   }
   function thumbLights(c, i, t) {
     const [g, w, h] = prepThumb(c), st = LIGHT_STYLES[i], n = 7;
@@ -985,10 +1246,10 @@
     }
   }
   function thumbDiya(c, i, t) {
-    const [g, w, h] = prepThumb(c), s = Math.min(1, (w - 8) / 92);
-    const bx = w / 2 - (i === 2 ? 0 : 6 * s), by = h - 8, [wx, wy] = diyaWick(i, s);
-    g.save(); g.translate(bx, by); drawDiyaBody(g, i, s, true, t); g.restore();
-    drawFlame(g, bx + wx, by + wy, s, 1, Math.sin(t * 1.7) * 0.1, t);
+    const [g, w, h] = prepThumb(c), s = Math.min((w - 8) / 92, (h - 8) / (i === 2 ? 66 : 44));
+    const bx = w / 2, by = h - 5, [wx, wy] = diyaWick(i, s);
+    g.save(); g.translate(bx, by); drawDiyaBody(g, i, s, 1); g.restore();
+    drawFlame(g, bx + wx, by + wy, s, 1, Math.sin(t * 1.7) * 0.06, t);
   }
   const chL = document.getElementById('chLantern'), chB = document.getElementById('chLights'), chD = document.getElementById('chDiya');
   makeChoices(chL, LANTERN_STYLES, 'lantern', thumbLantern);
@@ -1000,8 +1261,7 @@
     if (key === 'lantern') { const on = lantern ? lantern.on : true; lantern = null; buildLantern(); lantern.on = on; }
     if (key === 'lights') buildLights();
   }
-  const tagInput = document.getElementById('tagText');
-  tagInput.value = S.tag; tagInput.addEventListener('input', () => { S.tag = tagInput.value; save(); });
+  document.getElementById('btnSizes').addEventListener('click', () => { setLanternScale(1); setDiyaScale(1.3); save(); Snd.tink(); });
   document.getElementById('btnRehang').addEventListener('click', () => { const on = lantern ? lantern.on : true; lantern = null; buildLantern(); lantern.on = on; Snd.tink(); });
   document.getElementById('btnLights').addEventListener('click', () => { const any = lights.bulbs.some((b) => b.on); lights.bulbs.forEach((b) => (b.on = !any)); lantern.on = !any; diya.lit = !any; Snd.click(); });
   document.getElementById('btnClear').addEventListener('click', () => { crackers.length = 0; parts.length = 0; });
@@ -1032,7 +1292,7 @@
 
   // desktop bridge
   if (DESKTOP && window.desktop) {
-    if (window.desktop.onMode) window.desktop.onMode((m) => { deskMode = m === 'desktop'; optDesk.checked = deskMode; lastIgnore = null; if (window.desktop.setIgnore) reportHit(); showHint(deskMode ? 'Desktop mode: empty space clicks go to your apps. The kandil, lights, diya and tinsel stay interactive.' : 'Celebrate mode: click anywhere for sparkles, double-click for crackers.', 3200); });
+    if (window.desktop.onMode) window.desktop.onMode((m) => { deskMode = m === 'desktop'; optDesk.checked = deskMode; lastIgnore = null; if (window.desktop.setIgnore) reportHit(); showHint(deskMode ? 'Desktop mode: empty space clicks go to your apps. The kandil, lights and diya stay interactive.' : 'Celebrate mode: click anywhere for sparkles, double-click for crackers.', 3200); });
     if (window.desktop.onOpenOptions) window.desktop.onOpenOptions(() => openPanel(true));
   }
 
@@ -1084,6 +1344,7 @@
     drawLantern(t);
     drawLights(t);
     ctx.save(); ctx.globalCompositeOperation = 'lighter'; drawParts(true); ctx.restore();
+    updateHandles(); drawHandles(); updateCursor();
     drawSparkler(t);
     drawThumbs(t);
     requestAnimationFrame(frame);
@@ -1092,11 +1353,11 @@
   resize();
   requestAnimationFrame(frame);
   setTimeout(() => showHint(window.matchMedia('(pointer: coarse)').matches
-    ? 'Tap the kandil, bulbs or diya. Drag the kandil to swing it, pull hard to pluck. Double-tap for a cracker. ⚙ for options.'
-    : 'Click the kandil, bulbs or diya. Drag the kandil to swing it, pull hard to pluck. Double-click for a cracker. ⚙ for options.', 6000), 600);
+    ? 'Tap the kandil, bulbs or diya. Drag the kandil to swing it, pull hard to pluck. Tap it, then drag the corner handle to resize. Double-tap for a cracker. ⚙ for options.'
+    : 'Click the kandil, bulbs or diya. Drag the kandil to swing it, pull hard to pluck. Drag the corner handle to resize. Double-click for a cracker. ⚙ for options.', 6500), 600);
 
   if ('serviceWorker' in navigator && location.protocol === 'https:') navigator.serviceWorker.register('sw.js').catch(() => {});
 
   // test hooks (used by automated checks)
-  window.__diwali = { get lantern() { return lantern; }, get lights() { return lights; }, get diya() { return diya; }, get crackers() { return crackers; }, tap, dropCracker, S };
+  window.__diwali = { get lantern() { return lantern; }, get lights() { return lights; }, get diya() { return diya; }, get crackers() { return crackers; }, get RS() { return RS; }, tap, dropCracker, S, lanternBox, diyaBox };
 })();

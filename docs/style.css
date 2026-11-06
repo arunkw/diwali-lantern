@@ -24,7 +24,7 @@ canvas#scene { position: fixed; inset: 0; width: 100vw; height: 100vh; display: 
 body.sparkler, body.sparkler canvas { cursor: none; }
 
 .gear {
-  position: fixed; left: 14px; bottom: calc(14px + env(safe-area-inset-bottom));
+  position: fixed; right: 14px; top: calc(14px + env(safe-area-inset-top));
   width: 42px; height: 42px; border-radius: 50%;
   border: 1px solid var(--line); background: rgba(30, 16, 46, 0.72);
   color: var(--gold); display: grid; place-items: center; cursor: pointer;
@@ -33,7 +33,7 @@ body.sparkler, body.sparkler canvas { cursor: none; }
   z-index: 5;
 }
 .gear:hover { transform: rotate(40deg); background: rgba(50, 26, 70, 0.9); }
-body.desktop .gear { bottom: 10px; opacity: .55; }
+body.desktop .gear { top: 10px; right: 10px; opacity: .6; }
 body.desktop .gear:hover { opacity: 1; }
 
 .hint {
