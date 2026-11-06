@@ -1,8 +1,8 @@
 {
   "name": "diwali-lantern",
   "productName": "Diwali Lantern",
-  "version": "1.1.0",
-  "description": "Interactive Diwali kandil, string lights, diya and crackers on your Windows desktop. Happy Diwali from Doneology Labs.",
+  "version": "1.2.0",
+  "description": "Diwali kandil, string lights, diya and crackers floating as an overlay over your Windows apps. Happy Diwali from Doneology Labs.",
   "author": "Doneology Labs (OPC) Private Limited",
   "license": "MIT",
   "homepage": "https://github.com/arunkw/diwali-lantern",
@@ -19,10 +19,39 @@
     "appId": "in.doneology.diwalilantern",
     "productName": "Diwali Lantern",
     "copyright": "Copyright (c) 2026 Doneology Labs (OPC) Private Limited",
-    "files": ["main.js", "preload.js", "icon.png", "tray.png", "package.json"],
-    "extraResources": [{ "from": "../docs", "to": "web", "filter": ["**/*", "!og.png"] }],
-    "directories": { "output": "dist" },
-    "win": { "icon": "icon.ico", "artifactName": "DiwaliLantern-${version}-${arch}.${ext}" },
-    "portable": { "artifactName": "DiwaliLantern-Portable-${version}.exe" }
+    "files": [
+      "main.js",
+      "preload.js",
+      "icon.png",
+      "tray.png",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "../docs",
+        "to": "web",
+        "filter": [
+          "**/*",
+          "!og.png"
+        ]
+      }
+    ],
+    "directories": {
+      "output": "dist"
+    },
+    "win": {
+      "icon": "icon.ico",
+      "artifactName": "DiwaliLantern-${version}-${arch}.${ext}"
+    },
+    "portable": {
+      "artifactName": "DiwaliLantern-Portable-${version}.exe"
+    },
+    "npmRebuild": false,
+    "asarUnpack": [
+      "node_modules/uiohook-napi/**"
+    ]
+  },
+  "dependencies": {
+    "uiohook-napi": "^1.5.5"
   }
 }

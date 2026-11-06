@@ -34,6 +34,7 @@ body.sparkler, body.sparkler canvas { cursor: none; }
 }
 .gear:hover { transform: rotate(40deg); background: rgba(50, 26, 70, 0.9); }
 body.desktop .gear { top: 10px; right: 10px; opacity: .6; }
+body.desktop.overlay .gear { display: none; }
 body.desktop .gear:hover { opacity: 1; }
 
 .hint {

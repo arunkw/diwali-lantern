@@ -1049,7 +1049,6 @@
     if (lantern && (lanternHit(x, y) || cordAt(x, y))) return true;
     if (diyaHit(x, y)) return true;
     if (lights && bulbAt(x, y)) return true;
-    if (lights && y < 140 * U && lights.pts.some((p) => Math.hypot(p.x - x, p.y - y) < 40 * U)) return true;
     for (const c of crackers) if (Math.abs(c.x - x) < 40 * U && y > c.y - 60 * U) return true;
     return false;
   }
@@ -1156,7 +1155,7 @@
   cvs.addEventListener('pointerup', endPress);
   cvs.addEventListener('pointercancel', endPress);
   cvs.addEventListener('pointerleave', (e) => { if (!press) { M.inside = false; } });
-  cvs.addEventListener('contextmenu', (e) => e.preventDefault());
+  cvs.addEventListener('contextmenu', (e) => { e.preventDefault(); if ((lantern && lanternHit(e.clientX, e.clientY)) || diyaHit(e.clientX, e.clientY)) openPanel(true); });
   function avgVel() { const h = M.hist.slice(-4); if (!h.length) return [0, 0]; let sx = 0, sy = 0; h.forEach((v) => { sx += v[0]; sy += v[1]; }); return [clamp(sx / h.length, -45, 45), clamp(sy / h.length, -45, 45)]; }
 
   function tap(x, y, target) {
@@ -1192,7 +1191,7 @@
   let lastIgnore = null;
   function reportHit() {
     if (!deskMode) { if (lastIgnore !== false) { window.desktop.setIgnore(false); lastIgnore = false; } return; }
-    const hit = panelOpen || press || interactiveAt(M.x, M.y) || overGear(M.x, M.y);
+    const hit = panelOpen || press || interactiveAt(M.x, M.y) || (!deskMode && overGear(M.x, M.y));
     const ignore = !hit;
     if (ignore !== lastIgnore) { window.desktop.setIgnore(ignore); lastIgnore = ignore; }
   }
@@ -1292,9 +1291,18 @@
 
   // desktop bridge
   if (DESKTOP && window.desktop) {
-    if (window.desktop.onMode) window.desktop.onMode((m) => { deskMode = m === 'desktop'; optDesk.checked = deskMode; lastIgnore = null; if (window.desktop.setIgnore) reportHit(); showHint(deskMode ? 'Desktop mode: empty space clicks go to your apps. The kandil, lights and diya stay interactive.' : 'Celebrate mode: click anywhere for sparkles, double-click for crackers.', 3200); });
+    if (window.desktop.onMode) window.desktop.onMode((m, first) => {
+      deskMode = m === 'desktop'; optDesk.checked = deskMode; document.body.classList.toggle('overlay', deskMode);
+      lastIgnore = null; if (window.desktop.setIgnore) reportHit();
+      showHint(deskMode
+        ? (first ? 'Diwali Lantern is floating over your apps. Keep working as usual; the kandil, diya and bulbs stay clickable. Right-click the kandil or diya for options. Ctrl+Shift+Q quits.' : 'Overlay mode: clicks on empty space go to your apps.')
+        : 'Play mode: every click goes to the scene. Ctrl+Shift+D returns to overlay mode.', first ? 7000 : 3200);
+    });
     if (window.desktop.onOpenOptions) window.desktop.onOpenOptions(() => openPanel(true));
+    // a click that passed through the overlay to another app still leaves a sparkle (double-click: a cracker)
+    if (window.desktop.onGlobalClick) window.desktop.onGlobalClick((x, y) => { if (panelOpen) return; M.x = x; M.y = y; M.inside = true; tap(x, y, null); });
   }
+
 
   // ======================================================================
   // LOOP
@@ -1352,7 +1360,7 @@
 
   resize();
   requestAnimationFrame(frame);
-  setTimeout(() => showHint(window.matchMedia('(pointer: coarse)').matches
+  if (!DESKTOP) setTimeout(() => showHint(window.matchMedia('(pointer: coarse)').matches
     ? 'Tap the kandil, bulbs or diya. Drag the kandil to swing it, pull hard to pluck. Tap it, then drag the corner handle to resize. Double-tap for a cracker. ⚙ for options.'
     : 'Click the kandil, bulbs or diya. Drag the kandil to swing it, pull hard to pluck. Drag the corner handle to resize. Double-click for a cracker. ⚙ for options.', 6500), 600);
 
